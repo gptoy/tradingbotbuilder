@@ -1,0 +1,6 @@
+{
+  "name": "Trading Bot Builder",
+  "description": "파이썬 MACD & RSI 자동매매 시스템 코드 생성기 및 실시간 시뮬레이터",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
