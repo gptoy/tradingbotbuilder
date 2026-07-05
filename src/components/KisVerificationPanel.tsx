@@ -3,7 +3,7 @@ import {
   ShieldCheck, Terminal, Lock, RefreshCw, Play, Check, Copy,
   Info, CheckCircle2, Eye, EyeOff, Briefcase, Layers, Database,
   TrendingUp, TrendingDown, AlertTriangle, X, RotateCcw, Wallet,
-  Package, Clock, ChevronDown, ChevronUp, Zap
+  Package, Clock, ChevronDown, ChevronUp, Zap, Save, Trash2
 } from 'lucide-react';
 
 type Broker = 'kis' | 'kiwoom' | 'toss';
@@ -206,6 +206,44 @@ export default function KisVerificationPanel() {
   const [tossLoadingHistory, setTossLoadingHistory] = useState(false);
   const [tossCopied, setTossCopied]           = useState(false);
 
+  // ── Credential persistence state ─────────────────────────────────────────
+  const [kisSaved, setKisSaved]       = useState(false);
+  const [tossSaved, setTossSaved]     = useState(false);
+  const [kiwoomSaved, setKiwoomSaved] = useState(false);
+  const [kisHasStored, setKisHasStored]       = useState(false);
+  const [tossHasStored, setTossHasStored]     = useState(false);
+  const [kiwoomHasStored, setKiwoomHasStored] = useState(false);
+
+  // ── Load saved credentials on mount ──────────────────────────────────────
+  useEffect(() => {
+    try {
+      const kisCreds = localStorage.getItem('tbbuilder:kis');
+      if (kisCreds) {
+        const { appKey, appSecret, accountNo, serverType } = JSON.parse(kisCreds);
+        if (appKey)     setKisAppKey(appKey);
+        if (appSecret)  setKisAppSecret(appSecret);
+        if (accountNo)  setKisAccountNo(accountNo);
+        if (serverType) setKisServerType(serverType);
+        setKisHasStored(true);
+      }
+      const tossCreds = localStorage.getItem('tbbuilder:toss');
+      if (tossCreds) {
+        const { clientId, clientSecret } = JSON.parse(tossCreds);
+        if (clientId)     setTossClientId(clientId);
+        if (clientSecret) setTossClientSecret(clientSecret);
+        setTossHasStored(true);
+      }
+      const kiwoomCreds = localStorage.getItem('tbbuilder:kiwoom');
+      if (kiwoomCreds) {
+        const { accountNo, password, serverType } = JSON.parse(kiwoomCreds);
+        if (accountNo)  setKiwoomAccountNo(accountNo);
+        if (password)   setKiwoomPassword(password);
+        if (serverType) setKiwoomServerType(serverType);
+        setKiwoomHasStored(true);
+      }
+    } catch {}
+  }, []);
+
   const cano      = kisAccountNo.slice(0, 8);
   const acntPrdtCd = kisAccountNo.length > 8 ? kisAccountNo.slice(8) : '01';
 
@@ -392,6 +430,41 @@ export default function KisVerificationPanel() {
       fetchHistory();
     }
   }, [connStatus, kisSubTab, fetchHistory]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Credential save / clear helpers
+  // ═══════════════════════════════════════════════════════════════════════════
+  const saveKisCreds = () => {
+    localStorage.setItem('tbbuilder:kis', JSON.stringify({ appKey: kisAppKey, appSecret: kisAppSecret, accountNo: kisAccountNo, serverType: kisServerType }));
+    setKisHasStored(true); setKisSaved(true);
+    setTimeout(() => setKisSaved(false), 2000);
+  };
+  const clearKisCreds = () => {
+    localStorage.removeItem('tbbuilder:kis');
+    setKisAppKey(''); setKisAppSecret(''); setKisAccountNo(''); setKisHasStored(false);
+    handleDisconnect();
+  };
+
+  const saveTossCreds = () => {
+    localStorage.setItem('tbbuilder:toss', JSON.stringify({ clientId: tossClientId, clientSecret: tossClientSecret }));
+    setTossHasStored(true); setTossSaved(true);
+    setTimeout(() => setTossSaved(false), 2000);
+  };
+  const clearTossCreds = () => {
+    localStorage.removeItem('tbbuilder:toss');
+    setTossClientId(''); setTossClientSecret(''); setTossHasStored(false);
+    handleTossDisconnect();
+  };
+
+  const saveKiwoomCreds = () => {
+    localStorage.setItem('tbbuilder:kiwoom', JSON.stringify({ accountNo: kiwoomAccountNo, password: kiwoomPassword, serverType: kiwoomServerType }));
+    setKiwoomHasStored(true); setKiwoomSaved(true);
+    setTimeout(() => setKiwoomSaved(false), 2000);
+  };
+  const clearKiwoomCreds = () => {
+    localStorage.removeItem('tbbuilder:kiwoom');
+    setKiwoomAccountNo(''); setKiwoomPassword(''); setKiwoomHasStored(false);
+  };
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Toss Real API functions
@@ -928,6 +1001,27 @@ if __name__ == "__main__":
         )}
       </div>
 
+      {/* Save / Clear credentials */}
+      <div className="flex items-center gap-2">
+        <button onClick={saveKisCreds} disabled={!kisAppKey && !kisAppSecret}
+          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
+          {kisSaved
+            ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span className="text-emerald-400">저장됨</span></>
+            : <><Save className="h-3.5 w-3.5" />자격증명 저장</>}
+        </button>
+        {kisHasStored && (
+          <button onClick={clearKisCreds}
+            className="py-2 px-2.5 rounded-xl text-xs font-bold bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/40 transition cursor-pointer flex items-center gap-1">
+            <Trash2 className="h-3.5 w-3.5" />삭제
+          </button>
+        )}
+      </div>
+      {kisHasStored && !kisSaved && (
+        <p className="text-[10px] text-emerald-600 flex items-center gap-1 -mt-1">
+          <Database className="h-3 w-3" />저장된 자격증명 불러옴
+        </p>
+      )}
+
       {/* Connect Button */}
       <div className="pt-1">
         {connStatus === 'connected' ? (
@@ -1347,6 +1441,27 @@ if __name__ == "__main__":
           disabled={tossConnStatus === 'connected'}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
       </div>
+
+      {/* Save / Clear credentials */}
+      <div className="flex items-center gap-2">
+        <button onClick={saveTossCreds} disabled={!tossClientId && !tossClientSecret}
+          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
+          {tossSaved
+            ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span className="text-emerald-400">저장됨</span></>
+            : <><Save className="h-3.5 w-3.5" />자격증명 저장</>}
+        </button>
+        {tossHasStored && (
+          <button onClick={clearTossCreds}
+            className="py-2 px-2.5 rounded-xl text-xs font-bold bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/40 transition cursor-pointer flex items-center gap-1">
+            <Trash2 className="h-3.5 w-3.5" />삭제
+          </button>
+        )}
+      </div>
+      {tossHasStored && !tossSaved && (
+        <p className="text-[10px] text-emerald-600 flex items-center gap-1 -mt-1">
+          <Database className="h-3 w-3" />저장된 자격증명 불러옴
+        </p>
+      )}
 
       {tossConnStatus === 'connected' && tossAccountNoDisplay && (
         <div className="bg-blue-950/20 border border-blue-800/40 rounded-xl p-3">
@@ -1957,6 +2072,26 @@ if __name__ == "__main__":
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
                 <p className="text-[10px] text-slate-500 mt-1">키움 OpenAPI는 Windows 32비트 전용입니다.</p>
               </div>
+              {/* Save / Clear credentials */}
+              <div className="flex items-center gap-2">
+                <button onClick={saveKiwoomCreds} disabled={!kiwoomAccountNo && !kiwoomPassword}
+                  className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
+                  {kiwoomSaved
+                    ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span className="text-emerald-400">저장됨</span></>
+                    : <><Save className="h-3.5 w-3.5" />자격증명 저장</>}
+                </button>
+                {kiwoomHasStored && (
+                  <button onClick={clearKiwoomCreds}
+                    className="py-2 px-2.5 rounded-xl text-xs font-bold bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/40 transition cursor-pointer flex items-center gap-1">
+                    <Trash2 className="h-3.5 w-3.5" />삭제
+                  </button>
+                )}
+              </div>
+              {kiwoomHasStored && !kiwoomSaved && (
+                <p className="text-[10px] text-emerald-600 flex items-center gap-1 -mt-1">
+                  <Database className="h-3 w-3" />저장된 자격증명 불러옴
+                </p>
+              )}
               <div className="pt-3 border-t border-slate-800">
                 <button onClick={runMockTest} disabled={isTesting}
                   className={`w-full py-3 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
