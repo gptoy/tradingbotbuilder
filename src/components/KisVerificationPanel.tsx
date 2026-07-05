@@ -124,10 +124,13 @@ export default function KisVerificationPanel() {
   const [activeBroker, setActiveBroker] = useState<Broker>('kis');
   const [kisSubTab, setKisSubTab] = useState<KisSubTab>('account');
 
-  // ── KIS Credentials ───────────────────────────────────────────────────────
-  const [kisAppKey, setKisAppKey]     = useState('');
-  const [kisAppSecret, setKisAppSecret] = useState('');
-  const [kisAccountNo, setKisAccountNo] = useState('');
+  // ── KIS Credentials (모의/실전 분리) ─────────────────────────────────────
+  const [kisVirtualAppKey, setKisVirtualAppKey]         = useState('');
+  const [kisVirtualAppSecret, setKisVirtualAppSecret]   = useState('');
+  const [kisVirtualAccountNo, setKisVirtualAccountNo]   = useState('');
+  const [kisRealAppKey, setKisRealAppKey]               = useState('');
+  const [kisRealAppSecret, setKisRealAppSecret]         = useState('');
+  const [kisRealAccountNo, setKisRealAccountNo]         = useState('');
   const [kisServerType, setKisServerType] = useState<'virtual' | 'real'>('virtual');
   const [showSecret, setShowSecret]   = useState(false);
 
@@ -210,21 +213,29 @@ export default function KisVerificationPanel() {
   const [kisSaved, setKisSaved]       = useState(false);
   const [tossSaved, setTossSaved]     = useState(false);
   const [kiwoomSaved, setKiwoomSaved] = useState(false);
-  const [kisHasStored, setKisHasStored]       = useState(false);
-  const [tossHasStored, setTossHasStored]     = useState(false);
-  const [kiwoomHasStored, setKiwoomHasStored] = useState(false);
+  const [kisVirtualHasStored, setKisVirtualHasStored] = useState(false);
+  const [kisRealHasStored, setKisRealHasStored]       = useState(false);
+  const [tossHasStored, setTossHasStored]             = useState(false);
+  const [kiwoomHasStored, setKiwoomHasStored]         = useState(false);
 
   // ── Load saved credentials on mount ──────────────────────────────────────
   useEffect(() => {
     try {
-      const kisCreds = localStorage.getItem('tbbuilder:kis');
-      if (kisCreds) {
-        const { appKey, appSecret, accountNo, serverType } = JSON.parse(kisCreds);
-        if (appKey)     setKisAppKey(appKey);
-        if (appSecret)  setKisAppSecret(appSecret);
-        if (accountNo)  setKisAccountNo(accountNo);
-        if (serverType) setKisServerType(serverType);
-        setKisHasStored(true);
+      const kisVirtualCreds = localStorage.getItem('tbbuilder:kis:virtual');
+      if (kisVirtualCreds) {
+        const { appKey, appSecret, accountNo } = JSON.parse(kisVirtualCreds);
+        if (appKey)    setKisVirtualAppKey(appKey);
+        if (appSecret) setKisVirtualAppSecret(appSecret);
+        if (accountNo) setKisVirtualAccountNo(accountNo);
+        setKisVirtualHasStored(true);
+      }
+      const kisRealCreds = localStorage.getItem('tbbuilder:kis:real');
+      if (kisRealCreds) {
+        const { appKey, appSecret, accountNo } = JSON.parse(kisRealCreds);
+        if (appKey)    setKisRealAppKey(appKey);
+        if (appSecret) setKisRealAppSecret(appSecret);
+        if (accountNo) setKisRealAccountNo(accountNo);
+        setKisRealHasStored(true);
       }
       const tossCreds = localStorage.getItem('tbbuilder:toss');
       if (tossCreds) {
@@ -243,6 +254,17 @@ export default function KisVerificationPanel() {
       }
     } catch {}
   }, []);
+
+  // 현재 서버 타입에 따라 활성 자격증명 선택
+  const kisAppKey    = kisServerType === 'real' ? kisRealAppKey    : kisVirtualAppKey;
+  const kisAppSecret = kisServerType === 'real' ? kisRealAppSecret : kisVirtualAppSecret;
+  const kisAccountNo = kisServerType === 'real' ? kisRealAccountNo : kisVirtualAccountNo;
+  const kisHasStored = kisServerType === 'real' ? kisRealHasStored : kisVirtualHasStored;
+
+  // 활성 자격증명 setter
+  const setKisAppKey    = kisServerType === 'real' ? setKisRealAppKey    : setKisVirtualAppKey;
+  const setKisAppSecret = kisServerType === 'real' ? setKisRealAppSecret : setKisVirtualAppSecret;
+  const setKisAccountNo = kisServerType === 'real' ? setKisRealAccountNo : setKisVirtualAccountNo;
 
   const cano      = kisAccountNo.slice(0, 8);
   const acntPrdtCd = kisAccountNo.length > 8 ? kisAccountNo.slice(8) : '01';
@@ -435,13 +457,26 @@ export default function KisVerificationPanel() {
   // Credential save / clear helpers
   // ═══════════════════════════════════════════════════════════════════════════
   const saveKisCreds = () => {
-    localStorage.setItem('tbbuilder:kis', JSON.stringify({ appKey: kisAppKey, appSecret: kisAppSecret, accountNo: kisAccountNo, serverType: kisServerType }));
-    setKisHasStored(true); setKisSaved(true);
+    if (kisServerType === 'real') {
+      localStorage.setItem('tbbuilder:kis:real', JSON.stringify({ appKey: kisRealAppKey, appSecret: kisRealAppSecret, accountNo: kisRealAccountNo }));
+      setKisRealHasStored(true);
+    } else {
+      localStorage.setItem('tbbuilder:kis:virtual', JSON.stringify({ appKey: kisVirtualAppKey, appSecret: kisVirtualAppSecret, accountNo: kisVirtualAccountNo }));
+      setKisVirtualHasStored(true);
+    }
+    setKisSaved(true);
     setTimeout(() => setKisSaved(false), 2000);
   };
   const clearKisCreds = () => {
-    localStorage.removeItem('tbbuilder:kis');
-    setKisAppKey(''); setKisAppSecret(''); setKisAccountNo(''); setKisHasStored(false);
+    if (kisServerType === 'real') {
+      localStorage.removeItem('tbbuilder:kis:real');
+      setKisRealAppKey(''); setKisRealAppSecret(''); setKisRealAccountNo('');
+      setKisRealHasStored(false);
+    } else {
+      localStorage.removeItem('tbbuilder:kis:virtual');
+      setKisVirtualAppKey(''); setKisVirtualAppSecret(''); setKisVirtualAccountNo('');
+      setKisVirtualHasStored(false);
+    }
     handleDisconnect();
   };
 
@@ -969,30 +1004,49 @@ if __name__ == "__main__":
         )}
       </div>
 
-      {/* Credentials */}
+      {/* Credentials — 모의/실전 분리 안내 */}
+      <div className="flex items-start gap-2 p-2 bg-slate-900/60 border border-slate-700/50 rounded-lg">
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+        <p className="text-[10px] text-slate-400 leading-relaxed">
+          모의투자·실전투자는 <strong className="text-slate-200">KIS 개발자포털에서 각각 별도 앱 등록</strong>이 필요합니다.
+          서버를 전환하면 해당 서버의 자격증명으로 자동 전환됩니다.
+        </p>
+      </div>
       <div>
-        <label className="block text-[11px] font-bold text-slate-400 mb-1.5">App Key</label>
+        <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
+          App Key <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-900/50 text-rose-300' : 'bg-emerald-900/50 text-emerald-300'}`}>
+            {kisServerType === 'real' ? '실전' : '모의'}
+          </span>
+        </label>
         <input type="text" value={kisAppKey} onChange={e => setKisAppKey(e.target.value)}
-          placeholder="apiportal.koreainvestment.com에서 발급"
+          placeholder={kisServerType === 'real' ? '실전투자 App Key' : '모의투자 App Key'}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
       </div>
       <div>
         <div className="flex justify-between items-center mb-1.5">
-          <label className="block text-[11px] font-bold text-slate-400">App Secret</label>
+          <label className="block text-[11px] font-bold text-slate-400">
+            App Secret <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-900/50 text-rose-300' : 'bg-emerald-900/50 text-emerald-300'}`}>
+              {kisServerType === 'real' ? '실전' : '모의'}
+            </span>
+          </label>
           <button onClick={() => setShowSecret(!showSecret)} className="text-[9px] text-emerald-400 flex items-center gap-1">
             {showSecret ? <><EyeOff className="h-2.5 w-2.5" />숨기기</> : <><Eye className="h-2.5 w-2.5" />보이기</>}
           </button>
         </div>
         <input type={showSecret ? 'text' : 'password'} value={kisAppSecret}
           onChange={e => setKisAppSecret(e.target.value)}
-          placeholder="KIS App Secret"
+          placeholder={kisServerType === 'real' ? '실전투자 App Secret' : '모의투자 App Secret'}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
       </div>
       <div>
-        <label className="block text-[11px] font-bold text-slate-400 mb-1.5">종합계좌번호 (10자리)</label>
+        <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
+          종합계좌번호 (10자리) <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-900/50 text-rose-300' : 'bg-emerald-900/50 text-emerald-300'}`}>
+            {kisServerType === 'real' ? '실전계좌' : '모의계좌'}
+          </span>
+        </label>
         <input type="text" maxLength={10} value={kisAccountNo}
           onChange={e => setKisAccountNo(e.target.value.replace(/\D/g, ''))}
-          placeholder="예: 5006789401"
+          placeholder={kisServerType === 'real' ? '실전 계좌번호 10자리' : '모의 계좌번호 10자리'}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
         {kisAccountNo.length === 10 && (
           <p className="text-[10px] text-slate-500 mt-1">
@@ -1007,8 +1061,8 @@ if __name__ == "__main__":
         <button onClick={saveKisCreds} disabled={!kisAppKey && !kisAppSecret}
           className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
           {kisSaved
-            ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span className="text-emerald-400">저장됨</span></>
-            : <><Save className="h-3.5 w-3.5" />자격증명 저장</>}
+            ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span className="text-emerald-400">{kisServerType === 'real' ? '실전' : '모의'} 저장됨</span></>
+            : <><Save className="h-3.5 w-3.5" />{kisServerType === 'real' ? '실전' : '모의'} 자격증명 저장</>}
         </button>
         {kisHasStored && (
           <button onClick={clearKisCreds}
@@ -1019,7 +1073,7 @@ if __name__ == "__main__":
       </div>
       {kisHasStored && !kisSaved && (
         <p className="text-[10px] text-emerald-600 flex items-center gap-1 -mt-1">
-          <Database className="h-3 w-3" />저장된 자격증명 불러옴
+          <Database className="h-3 w-3" />{kisServerType === 'real' ? '실전' : '모의'} 저장된 자격증명 불러옴
         </p>
       )}
 
