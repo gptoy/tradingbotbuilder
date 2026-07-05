@@ -1,515 +1,512 @@
 import React, { useState } from 'react';
-import { Play, TrendingUp, AlertTriangle, ShieldCheck, ListFilter, ArrowUpRight, ArrowDownRight } from 'lucide-react';
-import { BotConfig, MarketBar, SimulatedPortfolio, Trade } from '../types';
-import { generateMockHistory, computeIndicators } from '../utils';
+import {
+  Play, TrendingUp, AlertTriangle, ListFilter,
+  ArrowUpRight, ArrowDownRight, Database, Shuffle,
+  RefreshCw, Info
+} from 'lucide-react';
+import { BotConfig, MarketBar, Trade } from '../types';
+import { generateMockHistory, computeIndicators, fetchRealCandleData } from '../utils';
 
-interface Props {
-  config: BotConfig;
+interface Props { config: BotConfig; }
+
+type DataSource = 'real' | 'mock';
+
+interface BacktestResult {
+  totalValue: number;
+  totalPnLPercent: number;
+  winRate: number;
+  completedCount: number;
+  winCount: number;
+  lossCount: number;
+  mdd: number;
+  initialBalance: number;
+  trades: Trade[];
+  equityHistory: { time: string; value: number; drawdown: number; price: number }[];
+  symbol: string;
+  dataSource: DataSource;
+  barCount: number;
+  dateRange: string;
 }
 
-export default function BacktestPanel({ config }: Props) {
-  const [candleCount, setCandleCount] = useState<number>(500);
-  const [isTesting, setIsTesting] = useState(false);
-  const [results, setResults] = useState<{
-    portfolio: SimulatedPortfolio;
-    winRate: number;
-    totalPnLPercent: number;
-    completedCount: number;
-    winCount: number;
-    lossCount: number;
-    mdd: number;
-    initialBalance: number;
-    equityHistory: { time: string; value: number; drawdown: number; price: number }[];
-  } | null>(null);
+// ── 백테스트 엔진 (시뮬레이터 동일 로직) ─────────────────────────────────────
+function runEngine(bars: MarketBar[], config: BotConfig): BacktestResult {
+  const initialBalance = 1_000_000;
+  let cash = initialBalance;
+  let holdings = 0;
+  let avgBuyPrice = 0;
+  let peakValue = initialBalance;
+  let maxDrawdown = 0;
+  const trades: Trade[] = [];
+  const equityHistory: { time: string; value: number; drawdown: number; price: number }[] = [];
 
-  const runBacktest = () => {
-    setIsTesting(true);
-    
-    // Simulate a brief delay to feel realistic and responsive
-    setTimeout(() => {
-      const initialBalance = 1000000; // 100만원
-      let cash = initialBalance;
-      let holdings = 0;
-      let avgBuyPrice = 0;
-      let peakValue = initialBalance;
-      let maxDrawdown = 0;
-      const trades: Trade[] = [];
-      const equityHistory: { time: string; value: number; drawdown: number; price: number }[] = [];
+  const computed = computeIndicators(bars, config);
 
-      // Generate historical candles
-      const testBars = generateMockHistory(candleCount, config);
+  for (let i = 30; i < computed.length; i++) {
+    const bar = computed[i];
+    const currentPrice = bar.close;
 
-      // Loop through candles starting from index 30 to allow indicator stability
-      for (let i = 30; i < testBars.length; i++) {
-        const bar = testBars[i];
-        const currentPrice = bar.close;
-
-        // 1. Check Stop Loss / Take Profit
-        if (holdings > 0 && avgBuyPrice > 0) {
-          const pnlPercent = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
-
-          // A. Stop Loss
-          if (pnlPercent <= -config.stopLoss) {
-            const sellAmount = holdings * currentPrice;
-            const profitAmt = sellAmount - (holdings * avgBuyPrice);
-            cash += sellAmount;
-
-            trades.push({
-              id: Math.random().toString(36).substring(2, 9),
-              type: 'STOP_LOSS',
-              price: currentPrice,
-              quantity: holdings,
-              amount: sellAmount,
-              timestamp: bar.timestamp,
-              timeString: bar.time,
-              balanceAfter: cash,
-              profitPercent: pnlPercent,
-              profitAmount: profitAmt
-            });
-
-            holdings = 0;
-            avgBuyPrice = 0;
-            continue;
-          }
-
-          // B. Take Profit
-          if (pnlPercent >= config.takeProfit) {
-            const sellAmount = holdings * currentPrice;
-            const profitAmt = sellAmount - (holdings * avgBuyPrice);
-            cash += sellAmount;
-
-            trades.push({
-              id: Math.random().toString(36).substring(2, 9),
-              type: 'TAKE_PROFIT',
-              price: currentPrice,
-              quantity: holdings,
-              amount: sellAmount,
-              timestamp: bar.timestamp,
-              timeString: bar.time,
-              balanceAfter: cash,
-              profitPercent: pnlPercent,
-              profitAmount: profitAmt
-            });
-
-            holdings = 0;
-            avgBuyPrice = 0;
-            continue;
-          }
-        }
-
-        // 2. Technical Indicator evaluation — 5-condition scoring
-        if (i < 2) continue;
-
-        const currBar = testBars[i];
-        const prevBar = testBars[i - 1];
-
-        const currRsi  = currBar.rsi        ?? 50;
-        const prevRsi  = prevBar.rsi        ?? 50;
-        const currMacd = currBar.macd       ?? 0;
-        const currSig  = currBar.macdSignal ?? 0;
-        const prevMacd = prevBar.macd       ?? 0;
-        const prevSig  = prevBar.macdSignal ?? 0;
-        const currHist = currBar.macdHist   ?? 0;
-        const prevHist = prevBar.macdHist   ?? 0;
-
-        // ① MACD 골든크로스 / 데드크로스
-        const isGoldenCross = prevMacd <= prevSig && currMacd > currSig;
-        const isDeadCross   = prevMacd >= prevSig && currMacd < currSig;
-
-        // ② MACD 히스토그램 증가
-        const histIncreasing = currHist > prevHist;
-
-        // ③ RSI 30~50 반등 또는 50선 상향 돌파
-        const rsiReboundFromOversold = currRsi > config.rsiOversold && currRsi <= 50 && currRsi > prevRsi;
-        const rsiCross50 = prevRsi < 50 && currRsi >= 50;
-        const rsiCondition = rsiReboundFromOversold || rsiCross50;
-
-        // ④ 가격이 이동평균선 위
-        const aboveMA = currBar.ma != null && currentPrice > currBar.ma;
-
-        // ⑤ 거래량 평균 초과
-        const volumeAboveAvg = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
-
-        // 점수 합산 (max 7)
-        let buyScore = 0;
-        if (isGoldenCross)  buyScore += 2;
-        if (histIncreasing) buyScore += 1;
-        if (rsiCondition)   buyScore += 2;
-        if (aboveMA)        buyScore += 1;
-        if (volumeAboveAvg) buyScore += 1;
-
-        // 매도 위험 판단
-        const lookbackSlice = testBars.slice(Math.max(0, i - config.rsiLookback + 1), i + 1);
-        const wasOverbought = lookbackSlice.some(b => (b.rsi ?? 50) >= config.rsiOverbought);
-
-        // A. BUY — 매수후보 (score >= 5)
-        if (buyScore >= 5 && holdings === 0) {
-          const buyBudget = cash * (config.tradeSize / 100);
-          const qty = buyBudget / currentPrice;
-
-          cash -= buyBudget;
-          holdings = qty;
-          avgBuyPrice = currentPrice;
-
-          trades.push({
-            id: Math.random().toString(36).substring(2, 9),
-            type: 'BUY',
-            price: currentPrice,
-            quantity: qty,
-            amount: buyBudget,
-            timestamp: bar.timestamp,
-            timeString: bar.time,
-            balanceAfter: cash
-          });
-        }
-        // B. SELL — 위험 (과열 + 데드크로스)
-        else if (wasOverbought && isDeadCross && holdings > 0) {
-          const sellAmount = holdings * currentPrice;
-          const profitAmt  = sellAmount - (holdings * avgBuyPrice);
-          const profitPct  = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
-          cash += sellAmount;
-
-          trades.push({
-            id: Math.random().toString(36).substring(2, 9),
-            type: 'SELL',
-            price: currentPrice,
-            quantity: holdings,
-            amount: sellAmount,
-            timestamp: bar.timestamp,
-            timeString: bar.time,
-            balanceAfter: cash,
-            profitPercent: profitPct,
-            profitAmount: profitAmt
-          });
-
-          holdings = 0;
-          avgBuyPrice = 0;
-        }
-
-        // Recalculate drawdown
-        const currentTotal = cash + (holdings * currentPrice);
-        peakValue = Math.max(peakValue, currentTotal);
-        const drawdown = ((peakValue - currentTotal) / peakValue) * 100;
-        maxDrawdown = Math.max(maxDrawdown, drawdown);
-
-        equityHistory.push({
-          time: bar.time,
-          value: currentTotal,
-          drawdown: drawdown,
-          price: currentPrice
-        });
+    // ① 손절 / 익절
+    if (holdings > 0 && avgBuyPrice > 0) {
+      const pnl = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
+      if (pnl <= -config.stopLoss) {
+        const amt = holdings * currentPrice;
+        cash += amt;
+        trades.push({ id: `sl-${i}`, type: 'STOP_LOSS', price: currentPrice, quantity: holdings, amount: amt, timestamp: bar.timestamp, timeString: bar.time, balanceAfter: cash, profitPercent: pnl, profitAmount: amt - holdings * avgBuyPrice });
+        holdings = 0; avgBuyPrice = 0;
+        equityHistory.push({ time: bar.time, value: cash, drawdown: 0, price: currentPrice });
+        continue;
       }
-
-      // Close out any final open positions to find end assets
-      const lastBar = testBars[testBars.length - 1];
-      let finalCash = cash;
-      if (holdings > 0) {
-        const sellAmount = holdings * lastBar.close;
-        const profitAmt = sellAmount - (holdings * avgBuyPrice);
-        const profitPct = ((lastBar.close - avgBuyPrice) / avgBuyPrice) * 100;
-        finalCash += sellAmount;
-        
-        trades.push({
-          id: 'backtest-final-close',
-          type: 'SELL',
-          price: lastBar.close,
-          quantity: holdings,
-          amount: sellAmount,
-          timestamp: lastBar.timestamp,
-          timeString: lastBar.time,
-          balanceAfter: finalCash,
-          profitPercent: profitPct,
-          profitAmount: profitAmt
-        });
-        holdings = 0;
+      if (pnl >= config.takeProfit) {
+        const amt = holdings * currentPrice;
+        cash += amt;
+        trades.push({ id: `tp-${i}`, type: 'TAKE_PROFIT', price: currentPrice, quantity: holdings, amount: amt, timestamp: bar.timestamp, timeString: bar.time, balanceAfter: cash, profitPercent: pnl, profitAmount: amt - holdings * avgBuyPrice });
+        holdings = 0; avgBuyPrice = 0;
+        equityHistory.push({ time: bar.time, value: cash, drawdown: 0, price: currentPrice });
+        continue;
       }
+    }
 
-      const totalValue = finalCash;
-      const completed = trades.filter(t => t.type !== 'BUY');
-      const wins = completed.filter(t => (t.profitPercent ?? 0) > 0);
-      const losses = completed.filter(t => (t.profitPercent ?? 0) <= 0);
-      const totalPnLPercent = ((totalValue - initialBalance) / initialBalance) * 100;
-      const winRate = completed.length > 0 ? (wins.length / completed.length) * 100 : 0;
+    // ② 5조건 스코어링
+    const curr = computed[i], prev = computed[i - 1];
+    const currRsi = curr.rsi ?? 50, prevRsi = prev.rsi ?? 50;
+    const currMacd = curr.macd ?? 0, currSig = curr.macdSignal ?? 0;
+    const prevMacd = prev.macd ?? 0, prevSig = prev.macdSignal ?? 0;
+    const currHist = curr.macdHist ?? 0, prevHist = prev.macdHist ?? 0;
 
-      setResults({
-        portfolio: {
-          cash: finalCash,
-          holdings: 0,
-          avgBuyPrice: 0,
-          totalValue,
-          peakValue,
-          maxDrawdown,
-          trades
-        },
-        winRate,
-        totalPnLPercent,
-        completedCount: completed.length,
-        winCount: wins.length,
-        lossCount: losses.length,
-        mdd: maxDrawdown,
-        initialBalance,
-        equityHistory
-      });
-      setIsTesting(false);
-    }, 900);
+    const isGoldenCross  = prevMacd <= prevSig && currMacd > currSig;
+    const isDeadCross    = prevMacd >= prevSig && currMacd < currSig;
+    const histIncreasing = currHist > prevHist;
+    const rsiCondition   = (currRsi > config.rsiOversold && currRsi <= 50 && currRsi > prevRsi)
+                         || (prevRsi < 50 && currRsi >= 50);
+    const aboveMA        = curr.ma20 != null && currentPrice > curr.ma20;
+    const volumeAboveAvg = curr.volumeMA != null && curr.volume > curr.volumeMA;
+
+    let buyScore = 0;
+    if (isGoldenCross)   buyScore += 2;
+    if (histIncreasing)  buyScore += 1;
+    if (rsiCondition)    buyScore += 2;
+    if (aboveMA)         buyScore += 1;
+    if (volumeAboveAvg)  buyScore += 1;
+
+    const lookback = computed.slice(Math.max(0, i - config.rsiLookback + 1), i + 1);
+    const wasOverbought = lookback.some(b => (b.rsi ?? 50) >= config.rsiOverbought);
+
+    if (buyScore >= 5 && holdings === 0) {
+      const budget = cash * (config.tradeSize / 100);
+      const qty = budget / currentPrice;
+      cash -= budget; holdings = qty; avgBuyPrice = currentPrice;
+      trades.push({ id: `buy-${i}`, type: 'BUY', price: currentPrice, quantity: qty, amount: budget, timestamp: bar.timestamp, timeString: bar.time, balanceAfter: cash });
+    } else if (wasOverbought && isDeadCross && holdings > 0) {
+      const amt = holdings * currentPrice;
+      const profitAmt = amt - holdings * avgBuyPrice;
+      const profitPct = ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100;
+      cash += amt;
+      trades.push({ id: `sell-${i}`, type: 'SELL', price: currentPrice, quantity: holdings, amount: amt, timestamp: bar.timestamp, timeString: bar.time, balanceAfter: cash, profitPercent: profitPct, profitAmount: profitAmt });
+      holdings = 0; avgBuyPrice = 0;
+    }
+
+    const total = cash + holdings * currentPrice;
+    peakValue = Math.max(peakValue, total);
+    const dd = ((peakValue - total) / peakValue) * 100;
+    maxDrawdown = Math.max(maxDrawdown, dd);
+    equityHistory.push({ time: bar.time, value: total, drawdown: dd, price: currentPrice });
+  }
+
+  // 마지막 포지션 강제 청산
+  const last = computed[computed.length - 1];
+  if (holdings > 0) {
+    const amt = holdings * last.close;
+    const profitAmt = amt - holdings * avgBuyPrice;
+    const profitPct = ((last.close - avgBuyPrice) / avgBuyPrice) * 100;
+    cash += amt;
+    trades.push({ id: 'final', type: 'SELL', price: last.close, quantity: holdings, amount: amt, timestamp: last.timestamp, timeString: last.time, balanceAfter: cash, profitPercent: profitPct, profitAmount: profitAmt });
+  }
+
+  const completed = trades.filter(t => t.type !== 'BUY');
+  const wins = completed.filter(t => (t.profitPercent ?? 0) > 0);
+  const totalPnLPercent = ((cash - initialBalance) / initialBalance) * 100;
+
+  return {
+    totalValue: cash,
+    totalPnLPercent,
+    winRate: completed.length > 0 ? (wins.length / completed.length) * 100 : 0,
+    completedCount: completed.length,
+    winCount: wins.length,
+    lossCount: completed.length - wins.length,
+    mdd: maxDrawdown,
+    initialBalance,
+    trades,
+    equityHistory,
+    symbol: config.symbol,
+    dataSource: 'real',
+    barCount: computed.length,
+    dateRange: computed.length > 0 ? `${computed[0].time} ~ ${computed[computed.length - 1].time}` : '',
   };
+}
 
-  const renderEquityChart = () => {
-    if (!results || results.equityHistory.length < 5) return null;
+// ── Equity Chart ──────────────────────────────────────────────────────────────
+function EquityChart({ result }: { result: BacktestResult }) {
+  const history = result.equityHistory;
+  if (history.length < 5) return null;
 
-    const width = 800;
-    const height = 180;
-    const padding = { top: 15, right: 65, bottom: 20, left: 15 };
+  const W = 800, H = 180;
+  const pad = { top: 15, right: 70, bottom: 20, left: 15 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
 
-    const chartWidth = width - padding.left - padding.right;
-    const chartHeight = height - padding.top - padding.bottom;
+  const stride = Math.max(1, Math.floor(history.length / 300));
+  const sampled = history.filter((_, i) => i % stride === 0);
+  if (sampled[sampled.length - 1] !== history[history.length - 1]) sampled.push(history[history.length - 1]);
 
-    const history = results.equityHistory;
-    
-    // Subsample if there are too many data points (performance optimization)
-    const stride = Math.max(1, Math.floor(history.length / 200));
-    const sampled = [];
-    for (let i = 0; i < history.length; i += stride) {
-      sampled.push(history[i]);
-    }
-    if (sampled[sampled.length - 1] !== history[history.length - 1]) {
-      sampled.push(history[history.length - 1]);
-    }
+  const vals = sampled.map(h => h.value);
+  const minV = Math.min(...vals) * 0.985;
+  const maxV = Math.max(...vals) * 1.015;
 
-    const values = sampled.map(h => h.value);
-    const minVal = Math.min(...values) * 0.98;
-    const maxVal = Math.max(...values) * 1.02;
+  const gx = (i: number) => pad.left + (i / (sampled.length - 1)) * cw;
+  const gy = (v: number) => pad.top + ch - ((v - minV) / (maxV - minV)) * ch;
 
-    const getX = (index: number) => padding.left + (index / (sampled.length - 1)) * chartWidth;
-    const getY = (val: number) => padding.top + chartHeight - ((val - minVal) / (maxVal - minVal)) * chartHeight;
+  let ePath = '';
+  sampled.forEach((h, i) => {
+    const x = gx(i), y = gy(h.value);
+    ePath += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
+  });
+  const fillPath = `${ePath} L ${gx(sampled.length - 1)} ${pad.top + ch} L ${gx(0)} ${pad.top + ch} Z`;
 
-    // Line Path for Equity
-    let equityPath = '';
-    sampled.forEach((h, i) => {
-      const x = getX(i);
-      const y = getY(h.value);
-      if (i === 0) equityPath += `M ${x} ${y}`;
-      else equityPath += ` L ${x} ${y}`;
-    });
+  // Mark buy/sell on chart
+  const buyPrices = result.trades.filter(t => t.type === 'BUY').map(t => t.price);
+  const minP = Math.min(...sampled.map(h => h.price));
+  const maxP = Math.max(...sampled.map(h => h.price));
+  const gprice = (p: number) => pad.top + ch - ((p - minP) / (maxP - minP)) * ch;
 
-    // Filled area under path
-    const fillPath = `${equityPath} L ${getX(sampled.length - 1)} ${padding.top + chartHeight} L ${getX(0)} ${padding.top + chartHeight} Z`;
+  let pricePath = '';
+  sampled.forEach((h, i) => {
+    const x = gx(i), y = gprice(h.price);
+    pricePath += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
+  });
 
-    // Drawdown Area (Top Shaded)
-    let drawdownPath = `M ${getX(0)} ${padding.top}`;
-    sampled.forEach((h, i) => {
-      const x = getX(i);
-      const maxDD = results.mdd || 1;
-      const y = padding.top + (h.drawdown / maxDD) * chartHeight * 0.4; // occupy top 40%
-      drawdownPath += ` L ${x} ${y}`;
-    });
-    drawdownPath += ` L ${getX(sampled.length - 1)} ${padding.top} Z`;
-
-    return (
-      <div className="bg-slate-950 rounded-xl p-4 border border-slate-900">
-        <div className="flex justify-between items-center mb-2">
-          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">누적 자산 변화 곡선 (Equity Curve) & 실시간 낙폭 (Drawdown)</span>
-          <div className="flex space-x-3 text-[9px] font-mono">
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-500/10 border border-emerald-500"></span>자산 가치</span>
-            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-rose-500/15 border border-rose-500/40"></span>실시간 낙폭 (Drawdown)</span>
-          </div>
-        </div>
-        <div className="h-[140px] w-full flex items-center justify-center">
-          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full text-slate-400 font-sans select-none">
-            {/* Y Gridlines and labels */}
-            {[0, 0.25, 0.5, 0.75, 1].map((ratio, idx) => {
-              const valAtRatio = maxVal - ratio * (maxVal - minVal);
-              const y = getY(valAtRatio);
-              return (
-                <g key={idx}>
-                  <line x1={padding.left} y1={y} x2={width - padding.right} y2={y} stroke="#1e293b" strokeWidth="1" strokeDasharray="2,4" />
-                  <text x={width - padding.right + 5} y={y + 3} fill="#64748b" className="text-[9px] font-mono">
-                    {valAtRatio.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* Drawdown Area (Top Shaded) */}
-            <path d={drawdownPath} fill="#f43f5e" fillOpacity="0.1" stroke="#f43f5e" strokeWidth="1" strokeOpacity="0.25" strokeDasharray="2,2" />
-
-            {/* Equity Area and Line */}
-            <path d={fillPath} fill="url(#backtestEquityGrad)" opacity="0.06" />
-            <path d={equityPath} fill="none" stroke="#10b981" strokeWidth="2" className="drop-shadow-[0_0_4px_rgba(16,185,129,0.2)]" />
-
-            {/* X-axis labels (start and end times) */}
-            <text x={padding.left} y={height - 2} fill="#475569" className="text-[9px] font-mono" textAnchor="start">
-              {history[0].time}
-            </text>
-            <text x={width - padding.right} y={height - 2} fill="#475569" className="text-[9px] font-mono" textAnchor="end">
-              {history[history.length - 1].time}
-            </text>
-
-            <defs>
-              <linearGradient id="backtestEquityGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#10b981" />
-                <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-          </svg>
+  return (
+    <div className="bg-slate-950 rounded-xl p-4 border border-slate-900 space-y-1">
+      <div className="flex justify-between items-center mb-1">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">누적 자산 곡선 (Equity Curve)</span>
+        <div className="flex gap-3 text-[9px] font-mono">
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-emerald-400"></span>자산</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-slate-600"></span>주가</span>
         </div>
       </div>
-    );
+      <div className="h-[150px] w-full">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full select-none">
+          {[0, 0.25, 0.5, 0.75, 1].map((r, i) => {
+            const v = maxV - r * (maxV - minV);
+            const y = gy(v);
+            return (
+              <g key={i}>
+                <line x1={pad.left} y1={y} x2={W - pad.right} y2={y} stroke="#1e293b" strokeWidth="1" strokeDasharray="3,5" />
+                <text x={W - pad.right + 5} y={y + 3} fill="#475569" fontSize="9" fontFamily="monospace">
+                  {(v / 10000).toFixed(0)}만
+                </text>
+              </g>
+            );
+          })}
+          {/* Price line (faint) */}
+          <path d={pricePath} fill="none" stroke="#334155" strokeWidth="1" />
+          {/* Equity area + line */}
+          <path d={fillPath} fill="url(#eqGrad)" opacity="0.12" />
+          <path d={ePath} fill="none" stroke="#10b981" strokeWidth="1.8" />
+          {/* Axis labels */}
+          <text x={pad.left} y={H - 3} fill="#475569" fontSize="9" fontFamily="monospace">{history[0].time}</text>
+          <text x={W - pad.right} y={H - 3} fill="#475569" fontSize="9" fontFamily="monospace" textAnchor="end">{history[history.length - 1].time}</text>
+          <defs>
+            <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" />
+              <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div className="text-[9px] text-slate-600 font-mono text-right">
+        매수 신호 {result.trades.filter(t => t.type === 'BUY').length}회 · 매도/손절/익절 {result.completedCount}회
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ─────────────────────────────────────────────────────────────
+export default function BacktestPanel({ config }: Props) {
+  const [dataSource, setDataSource] = useState<DataSource>('real');
+  const [mockBars, setMockBars] = useState(500);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<BacktestResult | null>(null);
+
+  const run = async () => {
+    setLoading(true);
+    setError('');
+    setResult(null);
+
+    try {
+      let bars: MarketBar[];
+      let src: DataSource = dataSource;
+
+      if (dataSource === 'real') {
+        try {
+          bars = await fetchRealCandleData(config);
+          if (bars.length < 40) throw new Error('데이터 부족');
+        } catch (e) {
+          setError(`실제 데이터 로드 실패 (${e instanceof Error ? e.message : '네트워크 오류'}). 가상 데이터로 대체합니다.`);
+          bars = generateMockHistory(mockBars, config);
+          src = 'mock';
+        }
+      } else {
+        bars = generateMockHistory(mockBars, config);
+        src = 'mock';
+      }
+
+      // 약간의 딜레이로 UI 피드백
+      await new Promise(r => setTimeout(r, 300));
+      const r = runEngine(bars, config);
+      r.dataSource = src;
+      setResult(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '알 수 없는 오류');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const currencyUnit = '원';
+  const STOCK_NAMES: Record<string, string> = {
+    '005930': '삼성전자', '000660': 'SK하이닉스', '035420': 'NAVER',
+    '005380': '현대자동차', '051910': 'LG화학', '035720': '카카오',
+    '068270': '셀트리온', '207940': '삼성바이오로직스', '000270': '기아',
+  };
+  const symbolName = STOCK_NAMES[config.symbol] ?? config.symbol;
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
-      {/* Run bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+
+      {/* ── 설정 바 ── */}
+      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
-          <h2 className="text-base font-bold text-slate-100">신속 과거 데이터 시뮬레이션 (Backtesting)</h2>
+          <h2 className="text-base font-bold text-slate-100">과거 데이터 백테스트</h2>
           <p className="text-xs text-slate-400 mt-1">
-            설정된 MACD 및 RSI 지표 변수와 리스크 관리 규칙을 활용해 {candleCount}봉의 가상 데이터를 즉시 돌려봅니다.
+            설정된 전략을 실제 주가 역사 데이터에 적용해 수익률·승률·MDD를 검증합니다.
           </p>
         </div>
-        <div className="flex items-center space-x-3">
-          <select
-            value={candleCount}
-            onChange={(e) => setCandleCount(Number(e.target.value))}
-            className="bg-slate-950 border border-slate-800 rounded-xl text-slate-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          >
-            <option value={300}>300 봉 (약 12일)</option>
-            <option value={500}>500 봉 (약 20일)</option>
-            <option value={1000}>1000 봉 (약 41일)</option>
-            <option value={2190}>2190 봉 (약 1년, 4시간봉 기준)</option>
-            <option value={8760}>8760 봉 (약 1년, 1시간봉 기준)</option>
-          </select>
+
+        <div className="flex flex-col gap-3 min-w-[260px]">
+          {/* 데이터 소스 선택 */}
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 mb-1.5">데이터 소스</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setDataSource('real')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                  dataSource === 'real'
+                    ? 'bg-emerald-900/40 border-emerald-600 text-emerald-400'
+                    : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <Database className="h-3.5 w-3.5" />
+                실제 데이터
+              </button>
+              <button
+                onClick={() => setDataSource('mock')}
+                className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                  dataSource === 'mock'
+                    ? 'bg-amber-900/40 border-amber-600 text-amber-400'
+                    : 'bg-slate-950 border-slate-800 text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <Shuffle className="h-3.5 w-3.5" />
+                가상 데이터
+              </button>
+            </div>
+          </div>
+
+          {/* 데이터 설명 */}
+          {dataSource === 'real' ? (
+            <div className="flex items-start gap-2 p-2.5 bg-emerald-950/30 border border-emerald-800/40 rounded-lg">
+              <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+              <div className="text-[10px] text-slate-400 leading-relaxed">
+                <span className="text-emerald-300 font-bold">{config.symbol} {symbolName}</span> 일봉
+                (네이버 금융, 최대 200거래일 ≈ 약 10개월)
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-1">가상 봉 수</label>
+              <select value={mockBars} onChange={e => setMockBars(Number(e.target.value))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg text-slate-300 px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-amber-500">
+                <option value={300}>300봉 (약 12일, 1H)</option>
+                <option value={500}>500봉 (약 20일, 1H)</option>
+                <option value={1000}>1,000봉 (약 41일, 1H)</option>
+                <option value={2190}>2,190봉 (약 1년, 4H)</option>
+                <option value={8760}>8,760봉 (약 1년, 1H)</option>
+              </select>
+              <p className="text-[9px] text-amber-600 mt-1">⚠ 가상 데이터는 실제 주가와 무관합니다.</p>
+            </div>
+          )}
+
+          {/* 실행 버튼 */}
           <button
-            onClick={runBacktest}
-            disabled={isTesting}
-            className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white font-semibold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer"
+            onClick={run}
+            disabled={loading}
+            className="flex items-center justify-center gap-2 bg-emerald-700 hover:bg-emerald-600 disabled:bg-slate-800 text-white font-bold text-xs px-4 py-2.5 rounded-xl transition cursor-pointer disabled:opacity-50"
           >
-            <Play className={`h-4 w-4 ${isTesting ? 'animate-spin' : ''}`} />
-            <span>{isTesting ? '백테스트 분석 중...' : '백테스트 실행'}</span>
+            {loading
+              ? <><RefreshCw className="h-4 w-4 animate-spin" />분석 중…</>
+              : <><Play className="h-4 w-4" />백테스트 실행</>}
           </button>
         </div>
       </div>
 
-      {/* Results panel */}
-      {results ? (
-        <div className="space-y-6">
-          {/* Dashboard Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-              <p className="text-[11px] text-slate-500 font-medium">최종 자산 가치</p>
-              <p className="text-lg font-mono font-bold text-slate-100 mt-1">
-                {results.portfolio.totalValue.toLocaleString(undefined, { maximumFractionDigits: 1 })}{' '}
-                <span className="text-xs text-slate-500">{currencyUnit}</span>
-              </p>
-              <span className={`text-[10px] font-mono font-bold flex items-center gap-0.5 mt-2 ${results.totalPnLPercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {results.totalPnLPercent >= 0 ? (
-                  <ArrowUpRight className="h-3 w-3" />
-                ) : (
-                  <ArrowDownRight className="h-3 w-3" />
-                )}
-                {results.totalPnLPercent >= 0 ? '+' : ''}
-                {results.totalPnLPercent.toFixed(2)}% 수익률
-              </span>
-            </div>
+      {/* ── 오류 ── */}
+      {error && (
+        <div className="flex items-start gap-2 p-3 bg-amber-950/30 border border-amber-800/40 rounded-xl text-[11px] text-amber-400">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+          {error}
+        </div>
+      )}
 
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-              <p className="text-[11px] text-slate-500 font-medium">총 거래 횟수</p>
-              <p className="text-lg font-mono font-bold text-slate-100 mt-1">
-                {results.completedCount} <span className="text-xs text-slate-500">회</span>
-              </p>
-              <p className="text-[10px] text-slate-400 mt-2">
-                포지션 종료 기준 (총 {results.portfolio.trades.length}건 거래)
-              </p>
-            </div>
+      {/* ── 결과 ── */}
+      {result ? (
+        <div className="space-y-5">
 
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-              <p className="text-[11px] text-slate-500 font-medium">승률 (Win Rate)</p>
-              <p className="text-lg font-mono font-bold text-amber-400 mt-1">
-                {results.winRate.toFixed(1)}%
-              </p>
-              <p className="text-[10px] text-slate-400 mt-2 flex items-center justify-between">
-                <span>성공: {results.winCount}회</span>
-                <span>실패: {results.lossCount}회</span>
-              </p>
-            </div>
-
-            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
-              <p className="text-[11px] text-slate-500 font-medium">최대 낙폭 (Max Drawdown)</p>
-              <p className="text-lg font-mono font-bold text-rose-400 mt-1">
-                -{results.mdd.toFixed(2)}%
-              </p>
-              <p className="text-[10px] text-slate-400 mt-2">
-                역사적 최고 자산 가치 대비 낙폭
-              </p>
-            </div>
+          {/* 메타 정보 */}
+          <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-500">
+            <span className="flex items-center gap-1">
+              {result.dataSource === 'real'
+                ? <><Database className="h-3 w-3 text-emerald-400" /><span className="text-emerald-400">실제 데이터</span></>
+                : <><Shuffle className="h-3 w-3 text-amber-400" /><span className="text-amber-400">가상 데이터</span></>}
+            </span>
+            <span>종목: <span className="text-slate-300">{result.symbol} {symbolName}</span></span>
+            <span>기간: <span className="text-slate-300">{result.dateRange}</span></span>
+            <span>봉 수: <span className="text-slate-300">{result.barCount}개</span></span>
           </div>
 
-          {renderEquityChart()}
+          {/* KPI 카드 */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              {
+                label: '최종 자산',
+                value: `${result.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}원`,
+                sub: (
+                  <span className={`flex items-center gap-0.5 text-[10px] font-bold mt-1.5 ${result.totalPnLPercent >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {result.totalPnLPercent >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
+                    {result.totalPnLPercent >= 0 ? '+' : ''}{result.totalPnLPercent.toFixed(2)}%
+                  </span>
+                ),
+              },
+              {
+                label: '거래 횟수',
+                value: `${result.completedCount}회`,
+                sub: <span className="text-[10px] text-slate-500 mt-1.5 block">매수 {result.trades.filter(t => t.type === 'BUY').length}회</span>,
+              },
+              {
+                label: '승률',
+                value: `${result.winRate.toFixed(1)}%`,
+                valueClass: 'text-amber-400',
+                sub: <span className="text-[10px] text-slate-500 mt-1.5 block">승 {result.winCount} / 패 {result.lossCount}</span>,
+              },
+              {
+                label: '최대 낙폭 (MDD)',
+                value: `-${result.mdd.toFixed(2)}%`,
+                valueClass: 'text-rose-400',
+                sub: <span className="text-[10px] text-slate-500 mt-1.5 block">고점 대비 최대 하락</span>,
+              },
+            ].map(card => (
+              <div key={card.label} className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+                <p className="text-[11px] text-slate-500">{card.label}</p>
+                <p className={`text-lg font-mono font-bold mt-1 ${(card as any).valueClass ?? 'text-slate-100'}`}>{card.value}</p>
+                {card.sub}
+              </div>
+            ))}
+          </div>
 
-          {/* Trade ledger table */}
+          {/* 전략 검증 메시지 */}
+          <div className={`flex items-start gap-2.5 p-3 rounded-xl border text-[11px] leading-relaxed ${
+            result.totalPnLPercent >= 5 && result.winRate >= 50
+              ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-300'
+              : result.totalPnLPercent < 0
+              ? 'bg-rose-950/30 border-rose-800/40 text-rose-300'
+              : 'bg-amber-950/30 border-amber-800/40 text-amber-300'
+          }`}>
+            <Info className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>
+              {result.dataSource === 'real'
+                ? `${result.symbol}(${symbolName}) 실제 일봉 ${result.barCount}개 기준 — `
+                : `가상 시뮬레이션 ${result.barCount}봉 기준 — `}
+              {result.totalPnLPercent >= 5 && result.winRate >= 50
+                ? `수익률 ${result.totalPnLPercent.toFixed(1)}% · 승률 ${result.winRate.toFixed(0)}%로 전략이 이 기간 유효했습니다. 모의투자로 추가 검증을 권장합니다.`
+                : result.totalPnLPercent < 0
+                ? `이 기간 전략이 손실(-${Math.abs(result.totalPnLPercent).toFixed(1)}%)을 기록했습니다. 파라미터 조정 또는 종목 교체를 검토하세요.`
+                : `수익률 ${result.totalPnLPercent.toFixed(1)}%로 제한적 성과입니다. 더 긴 기간 검증을 권장합니다.`}
+            </span>
+          </div>
+
+          <EquityChart result={result} />
+
+          {/* 거래 내역 */}
           <div>
             <h3 className="text-xs font-semibold text-slate-400 mb-3 flex items-center gap-1.5">
-              <ListFilter className="h-4 w-4 text-emerald-400" /> 상세 매매 체결 일지 (최근 완료순)
+              <ListFilter className="h-4 w-4 text-emerald-400" />
+              매매 체결 내역 (최신순)
             </h3>
-            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden max-h-[220px] overflow-y-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-900 border-b border-slate-800 text-slate-400 font-medium font-mono">
-                    <th className="p-3">시간</th>
-                    <th className="p-3">유형</th>
-                    <th className="p-3 text-right">체결 가격</th>
+            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden max-h-[240px] overflow-y-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="sticky top-0 bg-slate-900 border-b border-slate-800">
+                  <tr className="text-slate-500 font-mono text-[10px]">
+                    <th className="p-3">날짜</th>
+                    <th className="p-3">구분</th>
+                    <th className="p-3 text-right">체결가</th>
                     <th className="p-3 text-right">수량</th>
-                    <th className="p-3 text-right">실현 손익</th>
-                    <th className="p-3 text-right">자산 잔고</th>
+                    <th className="p-3 text-right">손익</th>
+                    <th className="p-3 text-right">잔고</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/50 font-mono">
-                  {results.portfolio.trades.slice().reverse().map((t, idx) => {
+                <tbody className="divide-y divide-slate-800/40 font-mono">
+                  {result.trades.length === 0 ? (
+                    <tr><td colSpan={6} className="p-8 text-center text-slate-600 text-xs">조건에 부합하는 거래가 없었습니다.</td></tr>
+                  ) : result.trades.slice().reverse().map((t, i) => {
                     const isBuy = t.type === 'BUY';
-                    const hasProfit = (t.profitPercent ?? 0) > 0;
+                    const up = (t.profitPercent ?? 0) > 0;
+                    const typeStyle = {
+                      BUY: 'bg-emerald-500/10 text-emerald-400',
+                      SELL: 'bg-amber-500/10 text-amber-400',
+                      STOP_LOSS: 'bg-rose-500/10 text-rose-400',
+                      TAKE_PROFIT: 'bg-indigo-500/10 text-indigo-400',
+                    }[t.type];
                     return (
-                      <tr key={idx} className="hover:bg-slate-900/40 text-slate-300">
-                        <td className="p-3 text-slate-500 text-[10px]">{t.timeString}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            t.type === 'BUY' ? 'bg-emerald-500/10 text-emerald-400' :
-                            t.type === 'STOP_LOSS' ? 'bg-rose-500/10 text-rose-400' :
-                            t.type === 'TAKE_PROFIT' ? 'bg-indigo-500/10 text-indigo-400' :
-                            'bg-amber-500/10 text-amber-400'
-                          }`}>
-                            {t.type}
+                      <tr key={i} className="hover:bg-slate-900/30">
+                        <td className="p-2.5 text-slate-500 text-[10px]">{t.timeString}</td>
+                        <td className="p-2.5">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${typeStyle}`}>
+                            {t.type === 'BUY' ? '매수' : t.type === 'SELL' ? '매도' : t.type === 'STOP_LOSS' ? '손절' : '익절'}
                           </span>
                         </td>
-                        <td className="p-3 text-right font-bold">{t.price.toLocaleString()}</td>
-                        <td className="p-3 text-right text-slate-400">{t.quantity.toFixed(4)}</td>
-                        <td className={`p-3 text-right font-bold ${isBuy ? 'text-slate-500' : hasProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {isBuy ? '-' : `${t.profitPercent! >= 0 ? '+' : ''}${t.profitPercent!.toFixed(1)}% (${t.profitAmount!.toLocaleString(undefined, { maximumFractionDigits: 0 })})`}
+                        <td className="p-2.5 text-right font-bold text-slate-200">{t.price.toLocaleString()}</td>
+                        <td className="p-2.5 text-right text-slate-500">{t.quantity.toFixed(4)}</td>
+                        <td className={`p-2.5 text-right font-bold text-[10px] ${isBuy ? 'text-slate-600' : up ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {isBuy ? '-' : `${up ? '+' : ''}${(t.profitPercent ?? 0).toFixed(2)}%`}
                         </td>
-                        <td className="p-3 text-right text-slate-400">{t.balanceAfter.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                        <td className="p-2.5 text-right text-slate-500 text-[10px]">{t.balanceAfter.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                       </tr>
                     );
                   })}
-                  {results.portfolio.trades.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="p-8 text-center text-slate-500 font-sans">
-                        테스트 기간 동안 조건에 부합하는 거래 건이 발생하지 않았습니다. 기술적 변수를 조정해 보십시오.
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
-      ) : (
-        <div className="bg-slate-950/50 border border-slate-800 border-dashed rounded-xl p-8 text-center text-slate-400 text-xs">
-          <Play className="h-8 w-8 text-slate-600 mx-auto mb-2.5" />
-          <p className="font-medium text-slate-300">백테스트 결과가 존재하지 않습니다</p>
-          <p className="text-slate-500 mt-1">
-            상단 버튼을 눌러 과거 시장 가상 흐름을 가속화해 MACD 및 RSI 크로스오버 승률 및 MDD 수익률을 예측해 보세요.
+      ) : !loading && (
+        <div className="bg-slate-950/50 border border-slate-800 border-dashed rounded-xl p-10 text-center space-y-2">
+          <TrendingUp className="h-10 w-10 text-slate-700 mx-auto" />
+          <p className="text-sm font-bold text-slate-400">백테스트 결과 없음</p>
+          <p className="text-xs text-slate-600 max-w-sm mx-auto">
+            {dataSource === 'real'
+              ? `"실제 데이터" 선택 시 ${config.symbol}(${symbolName})의 최근 약 200거래일 일봉을 기반으로 전략을 검증합니다.`
+              : '가상 데이터로 지표 파라미터 조정 효과를 빠르게 확인할 수 있습니다.'}
           </p>
+          <p className="text-[10px] text-slate-700">왼쪽 전략 패널에서 종목코드와 파라미터를 설정 후 실행하세요.</p>
         </div>
       )}
     </div>
