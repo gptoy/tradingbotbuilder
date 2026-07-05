@@ -445,23 +445,25 @@ export default function App() {
 
       {/* ── Body ────────────────────────────────────────────────────────────── */}
       <main className="relative z-10 flex-1 p-5">
-        {isBrokerTab ? (
-          /* 증권사 연동 탭: 왼쪽 투자 보조 패널 + 오른쪽 KIS 패널 (넓게) */
+        {/*
+          KisVerificationPanel은 항상 마운트 상태 유지 (CSS hidden으로만 가림).
+          탭 전환 시 unmount되면 setInterval이 소멸되어 자동매매가 중단되기 때문.
+        */}
+        <div className={isBrokerTab ? '' : 'hidden'}>
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-            {/* Left: investor decision support */}
             <aside className="xl:col-span-3 space-y-4">
               <InvestmentChecklist />
               <RiskPrinciples />
               <TradeCalendar />
             </aside>
-
-            {/* Right: broker integration (main content) */}
             <section className="xl:col-span-9">
               <KisVerificationPanel />
             </section>
           </div>
-        ) : (
-          /* 그 외 탭: 왼쪽 전략 설정 + 오른쪽 콘텐츠 */
+        </div>
+
+        {/* 그 외 탭: 왼쪽 전략 설정 + 오른쪽 콘텐츠 */}
+        {!isBrokerTab && (
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
             <aside className="xl:col-span-3">
               <StrategyConfig config={config} onChange={handleConfigChange} />
