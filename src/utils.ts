@@ -196,14 +196,15 @@ export function downsampleTo4h(bars1h: MarketBar[]): MarketBar[] {
 }
 
 // Fetch real historical candles — tries Vite plugin proxy first, then public fallbacks
-export async function fetchRealCandleData(config: BotConfig): Promise<MarketBar[]> {
+export async function fetchRealCandleData(config: BotConfig, count = 260): Promise<MarketBar[]> {
   const match = config.symbol.match(/\d{6}/);
   if (!match) throw new Error('6자리 숫자 종목코드가 필요합니다. (예: 005930)');
   const code = match[0];
+  const fetchCount = Math.min(Math.max(count, 20), 300); // 20~300 사이로 제한
 
   // 1. Vite plugin server-side proxy (most reliable, no CORS)
   try {
-    const res = await fetch(`/api/stock/${code}/candles?count=200`);
+    const res = await fetch(`/api/stock/${code}/candles?count=${fetchCount}`);
     if (res.ok) {
       const candles: { date: string; open: number; high: number; low: number; close: number; volume: number }[] = await res.json();
       if (Array.isArray(candles) && candles.length > 0) {
@@ -217,7 +218,7 @@ export async function fetchRealCandleData(config: BotConfig): Promise<MarketBar[
   } catch { /* fall through to public proxies */ }
 
   // 2 & 3. Public CORS proxy fallbacks (parse Naver fchart XML)
-  const naverUrl = `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=200&requestType=0`;
+  const naverUrl = `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=${fetchCount}&requestType=0`;
   let xmlText = '';
   for (const fetchFn of [
     () => fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(naverUrl)}`).then(r => r.json()).then((j: any) => String(j.contents || '')),

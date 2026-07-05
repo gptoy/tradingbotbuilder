@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Play, TrendingUp, AlertTriangle, ListFilter,
   ArrowUpRight, ArrowDownRight, Database, Shuffle,
-  RefreshCw, Info
+  RefreshCw, Info, Calendar
 } from 'lucide-react';
 import { BotConfig, MarketBar, Trade } from '../types';
 import { generateMockHistory, computeIndicators, fetchRealCandleData } from '../utils';
@@ -230,6 +230,16 @@ function EquityChart({ result }: { result: BacktestResult }) {
   );
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────────────────
+function toDateInput(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+function addDays(d: Date, days: number) {
+  const copy = new Date(d);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function BacktestPanel({ config }: Props) {
   const [dataSource, setDataSource] = useState<DataSource>('real');
@@ -238,7 +248,31 @@ export default function BacktestPanel({ config }: Props) {
   const [error, setError] = useState('');
   const [result, setResult] = useState<BacktestResult | null>(null);
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const oneYearAgo = addDays(today, -365);
+
+  const [startDate, setStartDate] = useState<string>(toDateInput(oneYearAgo));
+  const [endDate, setEndDate] = useState<string>(toDateInput(today));
+
+  const applyPreset = useCallback((days: number) => {
+    setStartDate(toDateInput(addDays(today, -days)));
+    setEndDate(toDateInput(today));
+  }, []);
+
+  const getDateRangeError = (): string => {
+    const s = new Date(startDate);
+    const e = new Date(endDate);
+    const diffDays = (e.getTime() - s.getTime()) / 86400000;
+    if (diffDays < 14) return '최소 2주(14일) 이상의 기간을 선택해주세요.';
+    if (diffDays > 365) return '최대 1년(365일) 이하로 선택해주세요.';
+    return '';
+  };
+
   const run = async () => {
+    const rangeError = dataSource === 'real' ? getDateRangeError() : '';
+    if (rangeError) { setError(rangeError); return; }
+
     setLoading(true);
     setError('');
     setResult(null);
@@ -248,11 +282,22 @@ export default function BacktestPanel({ config }: Props) {
       let src: DataSource = dataSource;
 
       if (dataSource === 'real') {
+        const s = new Date(startDate);
+        const e = new Date(endDate);
+        const rangeDays = (e.getTime() - s.getTime()) / 86400000;
+        // trading days ≈ range × 5/7, add 30-bar buffer for indicator warm-up
+        const fetchCount = Math.min(Math.round(rangeDays * 5 / 7) + 30, 300);
+
         try {
-          bars = await fetchRealCandleData(config);
-          if (bars.length < 40) throw new Error('데이터 부족');
-        } catch (e) {
-          setError(`실제 데이터 로드 실패 (${e instanceof Error ? e.message : '네트워크 오류'}). 가상 데이터로 대체합니다.`);
+          const allBars = await fetchRealCandleData(config, fetchCount);
+          if (allBars.length < 14) throw new Error('데이터 부족');
+          // filter to selected date range
+          const sTs = s.getTime();
+          const eTs = e.getTime() + 86400000; // end of selected day
+          bars = allBars.filter(b => b.timestamp >= sTs && b.timestamp <= eTs);
+          if (bars.length < 14) throw new Error(`선택 기간 내 데이터 부족 (${bars.length}개)`);
+        } catch (err) {
+          setError(`실제 데이터 로드 실패 (${err instanceof Error ? err.message : '네트워크 오류'}). 가상 데이터로 대체합니다.`);
           bars = generateMockHistory(mockBars, config);
           src = 'mock';
         }
@@ -261,7 +306,6 @@ export default function BacktestPanel({ config }: Props) {
         src = 'mock';
       }
 
-      // 약간의 딜레이로 UI 피드백
       await new Promise(r => setTimeout(r, 300));
       const r = runEngine(bars, config);
       r.dataSource = src;
@@ -322,13 +366,67 @@ export default function BacktestPanel({ config }: Props) {
             </div>
           </div>
 
-          {/* 데이터 설명 */}
+          {/* 데이터 설명 / 날짜 범위 */}
           {dataSource === 'real' ? (
-            <div className="flex items-start gap-2 p-2.5 bg-emerald-950/30 border border-emerald-800/40 rounded-lg">
-              <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
-              <div className="text-[10px] text-slate-400 leading-relaxed">
-                <span className="text-emerald-300 font-bold">{config.symbol} {symbolName}</span> 일봉
-                (네이버 금융, 최대 200거래일 ≈ 약 10개월)
+            <div className="flex flex-col gap-2">
+              {/* 종목 정보 */}
+              <div className="flex items-start gap-2 p-2.5 bg-emerald-950/30 border border-emerald-800/40 rounded-lg">
+                <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-[10px] text-slate-400 leading-relaxed">
+                  <span className="text-emerald-300 font-bold">{config.symbol} {symbolName}</span> 일봉
+                  (네이버 금융 · 최소 2주 ~ 최대 1년)
+                </div>
+              </div>
+              {/* 프리셋 버튼 */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-1.5 flex items-center gap-1">
+                  <Calendar className="h-3 w-3" />기간 선택
+                </label>
+                <div className="flex gap-1.5 flex-wrap mb-2">
+                  {[
+                    { label: '2주', days: 14 },
+                    { label: '1개월', days: 30 },
+                    { label: '3개월', days: 90 },
+                    { label: '6개월', days: 180 },
+                    { label: '1년', days: 365 },
+                  ].map(p => (
+                    <button
+                      key={p.label}
+                      onClick={() => applyPreset(p.days)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[10px] font-bold text-slate-300 transition cursor-pointer"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                {/* 날짜 입력 */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[9px] text-slate-500 mb-1">시작일</label>
+                    <input
+                      type="date"
+                      value={startDate}
+                      min={toDateInput(addDays(today, -365))}
+                      max={endDate}
+                      onChange={e => setStartDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg text-slate-300 px-2 py-1.5 text-[10px] font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] text-slate-500 mb-1">종료일</label>
+                    <input
+                      type="date"
+                      value={endDate}
+                      min={startDate}
+                      max={toDateInput(today)}
+                      onChange={e => setEndDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg text-slate-300 px-2 py-1.5 text-[10px] font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                {getDateRangeError() && (
+                  <p className="text-[9px] text-rose-400 mt-1">{getDateRangeError()}</p>
+                )}
               </div>
             </div>
           ) : (

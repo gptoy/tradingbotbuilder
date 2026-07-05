@@ -11,7 +11,8 @@ import type { MarketBar, BotConfig, SignalClass } from '../types';
 
 type Broker = 'kis' | 'kiwoom' | 'toss';
 type KisSubTab = 'account' | 'trade' | 'history' | 'script' | 'auto';
-type TossSubTab = 'account' | 'trade' | 'history' | 'script';
+type TossSubTab = 'account' | 'trade' | 'history' | 'script' | 'auto';
+type KiwoomSubTab = 'interactive' | 'script' | 'auto';
 type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 // SK 하이닉스 자동매매 기본 설정 (시뮬레이터와 동일)
@@ -216,8 +217,62 @@ export default function KisVerificationPanel() {
   const [testLogs, setTestLogs]               = useState<{ time: string; type: 'info' | 'success' | 'warning' | 'error'; message: string }[]>([]);
   const [testProgress, setTestProgress]       = useState(0);
   const [testResult, setTestResult]           = useState<'idle' | 'running' | 'success' | 'error'>('idle');
+  const [kiwoomSubTab, setKiwoomSubTab]       = useState<KiwoomSubTab>('interactive');
   const [mockActiveTab, setMockActiveTab]     = useState<'interactive' | 'script'>('interactive');
   const [copied, setCopied]                   = useState(false);
+
+  // ── Toss 자동매매 state ────────────────────────────────────────────────────
+  const [tossAutoEnabled, setTossAutoEnabled]             = useState(false);
+  const [tossAutoSymbol, setTossAutoSymbol]               = useState('000660');
+  const [tossAutoOrderQty, setTossAutoOrderQty]           = useState('1');
+  const [tossAutoCheckInterval, setTossAutoCheckInterval] = useState(30);
+  const [tossAutoSignal, setTossAutoSignal]               = useState<SignalClass>('관망');
+  const [tossAutoLastPrice, setTossAutoLastPrice]         = useState(0);
+  const [tossAutoPosition, setTossAutoPosition]           = useState<{ qty: number; avgPrice: number } | null>(null);
+  const [tossAutoIndicators, setTossAutoIndicators]       = useState<{ rsi: number; macd: number; macdSig: number; macdHist: number } | null>(null);
+  const [tossAutoLogs, setTossAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning'; msg: string }[]>([]);
+  const [tossAutoPlacing, setTossAutoPlacing]             = useState(false);
+  const [tossAutoLoadingCandles, setTossAutoLoadingCandles] = useState(false);
+
+  const tossAutoEnabledRef    = useRef(false);
+  const tossAutoSymbolRef     = useRef('000660');
+  const tossAutoCandlesRef    = useRef<MarketBar[]>([]);
+  const tossAutoPositionRef   = useRef<{ qty: number; avgPrice: number } | null>(null);
+  const tossAutoOrderQtyRef   = useRef('1');
+  const tossAutoIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const tossTokenRef          = useRef('');
+  const tossAccountSeqRef     = useRef<number | null>(null);
+  let tossAutoLogId           = useRef(0);
+
+  // ── Kiwoom 자동매매 신호 모니터 state ────────────────────────────────────
+  const [kiwoomAutoEnabled, setKiwoomAutoEnabled]             = useState(false);
+  const [kiwoomAutoSymbol, setKiwoomAutoSymbol]               = useState('000660');
+  const [kiwoomAutoCheckInterval, setKiwoomAutoCheckInterval] = useState(60);
+  const [kiwoomAutoSignal, setKiwoomAutoSignal]               = useState<SignalClass>('관망');
+  const [kiwoomAutoLastPrice, setKiwoomAutoLastPrice]         = useState(0);
+  const [kiwoomAutoIndicators, setKiwoomAutoIndicators]       = useState<{ rsi: number; macd: number; macdSig: number; macdHist: number } | null>(null);
+  const [kiwoomAutoLogs, setKiwoomAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'error' | 'warning'; msg: string }[]>([]);
+  const [kiwoomAutoLoadingCandles, setKiwoomAutoLoadingCandles] = useState(false);
+
+  const kiwoomAutoEnabledRef  = useRef(false);
+  const kiwoomAutoSymbolRef   = useRef('000660');
+  const kiwoomAutoCandlesRef  = useRef<MarketBar[]>([]);
+  const kiwoomAutoIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  let kiwoomAutoLogId         = useRef(0);
+
+  // ── 안정성 refs (토큰 갱신 / 캔들 갱신 / 중복주문 방지) ─────────────────────
+  const tokenExpiryRef             = useRef<Date | null>(null);
+  const tossTokenExpiryRef         = useRef<Date | null>(null);
+  const tossClientIdRef            = useRef('');
+  const tossClientSecretRef        = useRef('');
+  const autoPlacingRef             = useRef(false);  // 중복 주문 방지
+  const tossAutoPlacingRef         = useRef(false);
+  const autoConsecErrorsRef        = useRef(0);      // 연속 오류 카운터
+  const tossAutoConsecErrorsRef    = useRef(0);
+  const kiwoomAutoConsecErrorsRef  = useRef(0);
+  const autoLastCandleDayRef       = useRef('');     // YYYYMMDD — 캔들 갱신일 추적
+  const tossAutoLastCandleDayRef   = useRef('');
+  const kiwoomAutoLastCandleDayRef = useRef('');
 
   // ── Toss Real API state ───────────────────────────────────────────────────
   const [tossSubTab, setTossSubTab]           = useState<TossSubTab>('account');
@@ -260,42 +315,226 @@ export default function KisVerificationPanel() {
   const [tossHasStored, setTossHasStored]             = useState(false);
   const [kiwoomHasStored, setKiwoomHasStored]         = useState(false);
 
-  // ── Load saved credentials on mount ──────────────────────────────────────
+  // ── 마운트 시 자격증명 + 자동매매 상태 복구 ──────────────────────────────────
   useEffect(() => {
-    try {
-      const kisVirtualCreds = localStorage.getItem('tbbuilder:kis:virtual');
-      if (kisVirtualCreds) {
-        const { appKey, appSecret, accountNo } = JSON.parse(kisVirtualCreds);
-        if (appKey)    setKisVirtualAppKey(appKey);
-        if (appSecret) setKisVirtualAppSecret(appSecret);
-        if (accountNo) setKisVirtualAccountNo(accountNo);
-        setKisVirtualHasStored(true);
+    (async () => {
+      try {
+        // 1. 자격증명 로드
+        let kisVirtual = { appKey: '', appSecret: '', accountNo: '' };
+        let kisReal    = { appKey: '', appSecret: '', accountNo: '' };
+
+        const vRaw = localStorage.getItem('tbbuilder:kis:virtual');
+        if (vRaw) {
+          kisVirtual = JSON.parse(vRaw);
+          if (kisVirtual.appKey)    setKisVirtualAppKey(kisVirtual.appKey);
+          if (kisVirtual.appSecret) setKisVirtualAppSecret(kisVirtual.appSecret);
+          if (kisVirtual.accountNo) setKisVirtualAccountNo(kisVirtual.accountNo);
+          setKisVirtualHasStored(true);
+        }
+        const rRaw = localStorage.getItem('tbbuilder:kis:real');
+        if (rRaw) {
+          kisReal = JSON.parse(rRaw);
+          if (kisReal.appKey)    setKisRealAppKey(kisReal.appKey);
+          if (kisReal.appSecret) setKisRealAppSecret(kisReal.appSecret);
+          if (kisReal.accountNo) setKisRealAccountNo(kisReal.accountNo);
+          setKisRealHasStored(true);
+        }
+
+        let tossCreds = { clientId: '', clientSecret: '' };
+        const tossRaw = localStorage.getItem('tbbuilder:toss');
+        if (tossRaw) {
+          tossCreds = JSON.parse(tossRaw);
+          if (tossCreds.clientId)     { setTossClientId(tossCreds.clientId);       tossClientIdRef.current     = tossCreds.clientId; }
+          if (tossCreds.clientSecret) { setTossClientSecret(tossCreds.clientSecret); tossClientSecretRef.current = tossCreds.clientSecret; }
+          setTossHasStored(true);
+        }
+
+        const kiwoomRaw = localStorage.getItem('tbbuilder:kiwoom');
+        if (kiwoomRaw) {
+          const kw = JSON.parse(kiwoomRaw);
+          if (kw.accountNo)  setKiwoomAccountNo(kw.accountNo);
+          if (kw.password)   setKiwoomPassword(kw.password);
+          if (kw.serverType) setKiwoomServerType(kw.serverType);
+          setKiwoomHasStored(true);
+        }
+
+        // 2. 저장된 자동매매 상태 읽기 (active 값은 effect 시작 전에 capture)
+        const autoKisRaw    = localStorage.getItem('tbbuilder:auto:kis');
+        const autoTossRaw   = localStorage.getItem('tbbuilder:auto:toss');
+        const autoKiwoomRaw = localStorage.getItem('tbbuilder:auto:kiwoom');
+
+        const autoKis    = autoKisRaw    ? JSON.parse(autoKisRaw)    : null;
+        const autoToss   = autoTossRaw   ? JSON.parse(autoTossRaw)   : null;
+        const autoKiwoom = autoKiwoomRaw ? JSON.parse(autoKiwoomRaw) : null;
+
+        // 3. KIS 자동매매 자동 복구
+        if (autoKis?.active) {
+          const srv    = (autoKis.serverType ?? 'virtual') as 'virtual' | 'real';
+          const creds  = srv === 'real' ? kisReal : kisVirtual;
+
+          if (creds.appKey && creds.appSecret && creds.accountNo) {
+            // 설정 복구
+            const sym = autoKis.symbol ?? '000660';
+            const qty = autoKis.qty    ?? '1';
+            const iv  = autoKis.interval ?? 30;
+            const pos = autoKis.position ?? null;
+            setKisServerType(srv);
+            kisServerTypeRef.current = srv;
+            setAutoSymbol(sym);            autoSymbolRef.current     = sym;
+            setAutoOrderQty(qty);          autoOrderQtyRef.current   = qty;
+            setAutoCheckInterval(iv);
+            if (pos) { setAutoPosition(pos); autoPositionRef.current = pos; }
+
+            // 직접 refs 설정 (state 업데이트는 비동기이므로)
+            kisAppKeyRef.current    = creds.appKey;
+            kisAppSecretRef.current = creds.appSecret;
+            canoRef.current         = creds.accountNo.slice(0, 8);
+            acntPrdtCdRef.current   = creds.accountNo.length > 8 ? creds.accountNo.slice(8) : '01';
+            if (srv === 'real') { setKisRealAccountNo(creds.accountNo); }
+            else                { setKisVirtualAccountNo(creds.accountNo); }
+
+            try {
+              const tokRes  = await fetch('/api/kis/token', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ appKey: creds.appKey, appSecret: creds.appSecret }),
+              });
+              const tokData = await tokRes.json();
+              if (tokData.access_token) {
+                kisTokenRef.current = tokData.access_token;
+                setKisToken(tokData.access_token);
+                const exp = new Date();
+                exp.setSeconds(exp.getSeconds() + (tokData.expires_in ?? 86400));
+                tokenExpiryRef.current = exp; setTokenExpiry(exp);
+                setConnStatus('connected');
+
+                // 캔들 로드
+                const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
+                if (cRes.ok) {
+                  const candles: any[] = await cRes.json();
+                  if (Array.isArray(candles) && candles.length > 0) {
+                    const bars: MarketBar[] = candles.map((c: any) => ({
+                      time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
+                      timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
+                      open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+                    }));
+                    autoCandlesRef.current = computeIndicators(bars, AUTO_TRADE_CONFIG);
+                    autoLastCandleDayRef.current = candles[candles.length - 1].date;
+                  }
+                }
+
+                autoEnabledRef.current = true; setAutoEnabled(true);
+                autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
+                addAutoLog(`[자동 복구] 새로고침 후 KIS 자동매매 재개 (${srv === 'real' ? '실전' : '모의'} · ${sym})`, 'warning');
+              } else {
+                addAutoLog(`자동 복구 실패 (토큰 오류: ${tokData.msg1 ?? '-'}) — 수동 재시작 필요`, 'error');
+                try { localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...autoKis, active: false })); } catch {}
+              }
+            } catch (e) {
+              addAutoLog(`자동 복구 실패 (네트워크) — 수동 재시작 필요`, 'error');
+              try { localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...autoKis, active: false })); } catch {}
+            }
+          }
+        } else if (autoKis) {
+          // 설정값만 복원 (활성은 아님)
+          if (autoKis.symbol)   { setAutoSymbol(autoKis.symbol);   autoSymbolRef.current   = autoKis.symbol; }
+          if (autoKis.qty)      { setAutoOrderQty(autoKis.qty);    autoOrderQtyRef.current  = autoKis.qty; }
+          if (autoKis.interval) setAutoCheckInterval(autoKis.interval);
+          if (autoKis.position) { setAutoPosition(autoKis.position); autoPositionRef.current = autoKis.position; }
+        }
+
+        // 4. Toss 자동매매 자동 복구
+        if (autoToss?.active && tossCreds.clientId && tossCreds.clientSecret) {
+          const sym = autoToss.symbol ?? '000660';
+          const qty = autoToss.qty    ?? '1';
+          const iv  = autoToss.interval ?? 30;
+          const pos = autoToss.position ?? null;
+          setTossAutoSymbol(sym);            tossAutoSymbolRef.current   = sym;
+          setTossAutoOrderQty(qty);          tossAutoOrderQtyRef.current = qty;
+          setTossAutoCheckInterval(iv);
+          if (pos) { setTossAutoPosition(pos); tossAutoPositionRef.current = pos; }
+
+          try {
+            const tokRes  = await fetch('/api/toss/token', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ clientId: tossCreds.clientId, clientSecret: tossCreds.clientSecret }),
+            });
+            const tokData = await tokRes.json();
+            if (tokData.access_token) {
+              tossTokenRef.current = tokData.access_token; setTossToken(tokData.access_token);
+              const exp = new Date(); exp.setSeconds(exp.getSeconds() + (tokData.expires_in ?? 86400));
+              tossTokenExpiryRef.current = exp; setTossTokenExpiry(exp);
+
+              const accRes  = await fetch('/api/toss/accounts', { headers: { 'x-toss-token': tokData.access_token } });
+              const accData = await accRes.json();
+              if (accData.result?.[0]) {
+                const seq = accData.result[0].accountSeq;
+                setTossAccountSeq(seq);         tossAccountSeqRef.current = seq;
+                setTossAccountNoDisplay(accData.result[0].accountNo ?? String(seq));
+              }
+              setTossConnStatus('connected');
+
+              const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
+              if (cRes.ok) {
+                const candles: any[] = await cRes.json();
+                if (Array.isArray(candles) && candles.length > 0) {
+                  tossAutoCandlesRef.current = candles.map((c: any) => ({
+                    time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
+                    timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
+                    open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+                  }));
+                  tossAutoLastCandleDayRef.current = candles[candles.length - 1].date;
+                }
+              }
+              tossAutoEnabledRef.current = true; setTossAutoEnabled(true);
+              tossAutoIntervalRef.current = setInterval(runTossAutoCheck, iv * 1000);
+              addTossAutoLog(`[자동 복구] 새로고침 후 Toss 자동매매 재개 (${sym})`, 'warning');
+            } else {
+              addTossAutoLog('자동 복구 실패 — 수동 재시작 필요', 'error');
+              try { localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...autoToss, active: false })); } catch {}
+            }
+          } catch {
+            addTossAutoLog('자동 복구 실패 (네트워크) — 수동 재시작 필요', 'error');
+            try { localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...autoToss, active: false })); } catch {}
+          }
+        } else if (autoToss) {
+          if (autoToss.symbol)   { setTossAutoSymbol(autoToss.symbol);   tossAutoSymbolRef.current   = autoToss.symbol; }
+          if (autoToss.qty)      { setTossAutoOrderQty(autoToss.qty);    tossAutoOrderQtyRef.current  = autoToss.qty; }
+          if (autoToss.interval) setTossAutoCheckInterval(autoToss.interval);
+          if (autoToss.position) { setTossAutoPosition(autoToss.position); tossAutoPositionRef.current = autoToss.position; }
+        }
+
+        // 5. Kiwoom 신호 모니터 자동 복구 (토큰 불필요)
+        if (autoKiwoom?.active) {
+          const sym = autoKiwoom.symbol ?? '000660';
+          const iv  = autoKiwoom.interval ?? 60;
+          setKiwoomAutoSymbol(sym);  kiwoomAutoSymbolRef.current = sym;
+          setKiwoomAutoCheckInterval(iv);
+
+          const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
+          if (cRes.ok) {
+            const candles: any[] = await cRes.json();
+            if (Array.isArray(candles) && candles.length > 0) {
+              kiwoomAutoCandlesRef.current = candles.map((c: any) => ({
+                time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
+                timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
+                open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+              }));
+              kiwoomAutoLastCandleDayRef.current = candles[candles.length - 1].date;
+            }
+          }
+          kiwoomAutoEnabledRef.current = true; setKiwoomAutoEnabled(true);
+          kiwoomAutoIntervalRef.current = setInterval(runKiwoomSignalCheck, iv * 1000);
+          addKiwoomAutoLog(`[자동 복구] 새로고침 후 키움 신호 모니터 재개 (${sym})`, 'warning');
+        } else if (autoKiwoom) {
+          if (autoKiwoom.symbol)   { setKiwoomAutoSymbol(autoKiwoom.symbol); kiwoomAutoSymbolRef.current = autoKiwoom.symbol; }
+          if (autoKiwoom.interval) setKiwoomAutoCheckInterval(autoKiwoom.interval);
+        }
+
+      } catch (e) {
+        console.error('[mount restore]', e);
       }
-      const kisRealCreds = localStorage.getItem('tbbuilder:kis:real');
-      if (kisRealCreds) {
-        const { appKey, appSecret, accountNo } = JSON.parse(kisRealCreds);
-        if (appKey)    setKisRealAppKey(appKey);
-        if (appSecret) setKisRealAppSecret(appSecret);
-        if (accountNo) setKisRealAccountNo(accountNo);
-        setKisRealHasStored(true);
-      }
-      const tossCreds = localStorage.getItem('tbbuilder:toss');
-      if (tossCreds) {
-        const { clientId, clientSecret } = JSON.parse(tossCreds);
-        if (clientId)     setTossClientId(clientId);
-        if (clientSecret) setTossClientSecret(clientSecret);
-        setTossHasStored(true);
-      }
-      const kiwoomCreds = localStorage.getItem('tbbuilder:kiwoom');
-      if (kiwoomCreds) {
-        const { accountNo, password, serverType } = JSON.parse(kiwoomCreds);
-        if (accountNo)  setKiwoomAccountNo(accountNo);
-        if (password)   setKiwoomPassword(password);
-        if (serverType) setKiwoomServerType(serverType);
-        setKiwoomHasStored(true);
-      }
-    } catch {}
-  }, []);
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 현재 서버 타입에 따라 활성 자격증명 선택
   const kisAppKey    = kisServerType === 'real' ? kisRealAppKey    : kisVirtualAppKey;
@@ -318,6 +557,20 @@ export default function KisVerificationPanel() {
   useEffect(() => { canoRef.current = cano; acntPrdtCdRef.current = acntPrdtCd; }, [cano, acntPrdtCd]);
   useEffect(() => { autoOrderQtyRef.current = autoOrderQty; }, [autoOrderQty]);
   useEffect(() => { autoSymbolRef.current = autoSymbol; }, [autoSymbol]);
+
+  // Toss auto-trade ref sync
+  useEffect(() => { tossTokenRef.current = tossToken; }, [tossToken]);
+  useEffect(() => { tossAccountSeqRef.current = tossAccountSeq; }, [tossAccountSeq]);
+  useEffect(() => { tossAutoOrderQtyRef.current = tossAutoOrderQty; }, [tossAutoOrderQty]);
+  useEffect(() => { tossAutoSymbolRef.current = tossAutoSymbol; }, [tossAutoSymbol]);
+
+  // Kiwoom auto-trade ref sync
+  useEffect(() => { kiwoomAutoSymbolRef.current = kiwoomAutoSymbol; }, [kiwoomAutoSymbol]);
+
+  // 안정성 ref 동기화
+  useEffect(() => { tokenExpiryRef.current = tokenExpiry; }, [tokenExpiry]);
+  useEffect(() => { tossTokenExpiryRef.current = tossTokenExpiry; }, [tossTokenExpiry]);
+  useEffect(() => { tossClientIdRef.current = tossClientId; tossClientSecretRef.current = tossClientSecret; }, [tossClientId, tossClientSecret]);
 
   const kisHeaders = () => ({
     'Content-Type': 'application/json',
@@ -512,6 +765,66 @@ export default function KisVerificationPanel() {
   }, [connStatus, kisSubTab, fetchHistory]);
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // 토큰 자동 갱신 헬퍼
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // 토큰 만료 5분 전에 자동 갱신 (KIS)
+  const refreshKisTokenIfNeeded = useCallback(async (): Promise<boolean> => {
+    const expiry = tokenExpiryRef.current;
+    if (!expiry) return !!kisTokenRef.current;
+    if (expiry.getTime() - Date.now() > 5 * 60 * 1000) return true; // 아직 유효
+
+    addAutoLog('KIS 토큰 만료 임박 — 자동 갱신 중…', 'warning');
+    try {
+      const res  = await fetch('/api/kis/token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appKey: kisAppKeyRef.current, appSecret: kisAppSecretRef.current }),
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        kisTokenRef.current = data.access_token; setKisToken(data.access_token);
+        const exp = new Date(); exp.setSeconds(exp.getSeconds() + (data.expires_in ?? 86400));
+        tokenExpiryRef.current = exp; setTokenExpiry(exp);
+        addAutoLog('KIS 토큰 갱신 완료', 'success');
+        return true;
+      }
+      addAutoLog(`KIS 토큰 갱신 실패: ${data.msg1 ?? '오류'}`, 'error');
+      return false;
+    } catch (e) {
+      addAutoLog(`KIS 토큰 갱신 오류: ${e instanceof Error ? e.message : '네트워크'}`, 'error');
+      return false;
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 토큰 자동 갱신 (Toss)
+  const refreshTossTokenIfNeeded = useCallback(async (): Promise<boolean> => {
+    const expiry = tossTokenExpiryRef.current;
+    if (!expiry) return !!tossTokenRef.current;
+    if (expiry.getTime() - Date.now() > 5 * 60 * 1000) return true;
+
+    addTossAutoLog('Toss 토큰 만료 임박 — 자동 갱신 중…', 'warning');
+    try {
+      const res  = await fetch('/api/toss/token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: tossClientIdRef.current, clientSecret: tossClientSecretRef.current }),
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        tossTokenRef.current = data.access_token; setTossToken(data.access_token);
+        const exp = new Date(); exp.setSeconds(exp.getSeconds() + (data.expires_in ?? 86400));
+        tossTokenExpiryRef.current = exp; setTossTokenExpiry(exp);
+        addTossAutoLog('Toss 토큰 갱신 완료', 'success');
+        return true;
+      }
+      addTossAutoLog(`Toss 토큰 갱신 실패: ${data.message ?? '오류'}`, 'error');
+      return false;
+    } catch (e) {
+      addTossAutoLog(`Toss 토큰 갱신 오류: ${e instanceof Error ? e.message : '네트워크'}`, 'error');
+      return false;
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // 자동매매 (MACD 골든/데드크로스 + RSI 과매도 필터)
   // ═══════════════════════════════════════════════════════════════════════════
   const addAutoLog = useCallback((msg: string, type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning' = 'info') => {
@@ -536,6 +849,7 @@ export default function KisVerificationPanel() {
       }));
       const computed = computeIndicators(bars, AUTO_TRADE_CONFIG);
       autoCandlesRef.current = computed;
+      if (candles.length > 0) autoLastCandleDayRef.current = candles[candles.length - 1].date;
       return computed;
     } catch (e) {
       throw new Error(`캔들 로드 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`);
@@ -546,17 +860,33 @@ export default function KisVerificationPanel() {
 
   const runAutoCheck = useCallback(async () => {
     if (!autoEnabledRef.current) return;
-    const token = kisTokenRef.current;
-    if (!token) return;
 
     try {
+      // 0-a. 토큰 유효성 확인 및 갱신
+      const tokenOk = await refreshKisTokenIfNeeded();
+      if (!tokenOk) { addAutoLog('유효한 토큰 없음 — 다음 주기에 재시도', 'warning'); return; }
+
+      // 0-b. 새 거래일 캔들 갱신 (KST 기준 날짜 변경 감지)
+      const todayKst = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })
+        .replace(/\. /g, '').replace('.', '');  // e.g. "20260705"
+      if (autoLastCandleDayRef.current && autoLastCandleDayRef.current !== todayKst) {
+        addAutoLog(`새 거래일 감지 (${autoLastCandleDayRef.current}→${todayKst}) — 캔들 갱신 중…`, 'info');
+        try { await loadAutoCandles(); addAutoLog('캔들 갱신 완료', 'success'); }
+        catch (e) { addAutoLog(`캔들 갱신 실패: ${e instanceof Error ? e.message : '오류'}`, 'warning'); }
+      }
+
       // 1. 실시간 현재가 조회
       const priceRes = await fetch(`/api/kis/price?code=${autoSymbolRef.current}`, {
         headers: kisHeadersFromRef() as Record<string, string>,
       });
       const priceData = await priceRes.json();
       const currentPrice = parseInt(priceData.output?.stck_prpr ?? '0');
-      if (!currentPrice) { addAutoLog('현재가 조회 실패', 'error'); return; }
+      if (!currentPrice) {
+        autoConsecErrorsRef.current++;
+        addAutoLog(`현재가 조회 실패 (연속 ${autoConsecErrorsRef.current}회)`, 'warning');
+        return;
+      }
+      autoConsecErrorsRef.current = 0; // 성공 시 초기화
       setAutoLastPrice(currentPrice);
 
       // 2. 오늘 봉의 close를 현재가로 업데이트 후 지표 재계산
@@ -620,10 +950,10 @@ export default function KisVerificationPanel() {
       // 4. 자동 주문 실행
       const position = autoPositionRef.current;
 
-      if (signal === '매수후보' && !position) {
+      if (signal === '매수후보' && !position && !autoPlacingRef.current) {
         const qty = parseInt(autoOrderQtyRef.current) || 1;
         addAutoLog(`▶ 매수 신호 → ${qty}주 시장가 주문`, 'buy');
-        setAutoPlacing(true);
+        autoPlacingRef.current = true; setAutoPlacing(true);
         try {
           const r = await fetch('/api/kis/order', {
             method: 'POST',
@@ -637,17 +967,15 @@ export default function KisVerificationPanel() {
           if (d.rt_cd === '0') {
             const odno = d.output?.ODNO ?? '-';
             const newPos = { qty, avgPrice: currentPrice };
-            autoPositionRef.current = newPos;
-            setAutoPosition(newPos);
-            addAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (주문번호: ${odno})`, 'success');
-          } else {
-            addAutoLog(`❌ 매수 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error');
-          }
-        } finally { setAutoPlacing(false); }
+            autoPositionRef.current = newPos; setAutoPosition(newPos);
+            addAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${odno})`, 'success');
+            try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: newPos })); } catch {}
+          } else { addAutoLog(`❌ 매수 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error'); }
+        } finally { autoPlacingRef.current = false; setAutoPlacing(false); }
 
-      } else if (signal === '위험' && position) {
+      } else if (signal === '위험' && position && !autoPlacingRef.current) {
         addAutoLog(`▶ 매도 신호 → ${position.qty}주 시장가 주문`, 'sell');
-        setAutoPlacing(true);
+        autoPlacingRef.current = true; setAutoPlacing(true);
         try {
           const r = await fetch('/api/kis/order', {
             method: 'POST',
@@ -661,19 +989,17 @@ export default function KisVerificationPanel() {
           const profitPct = ((currentPrice - position.avgPrice) / position.avgPrice * 100).toFixed(2);
           const sign = currentPrice >= position.avgPrice ? '+' : '';
           if (d.rt_cd === '0') {
-            const odno = d.output?.ODNO ?? '-';
-            addAutoLog(`✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${sign}${profitPct}%) (${odno})`, 'success');
-            autoPositionRef.current = null;
-            setAutoPosition(null);
-          } else {
-            addAutoLog(`❌ 매도 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error');
-          }
-        } finally { setAutoPlacing(false); }
+            addAutoLog(`✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${sign}${profitPct}%) (${d.output?.ODNO ?? '-'})`, 'success');
+            autoPositionRef.current = null; setAutoPosition(null);
+            try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: null })); } catch {}
+          } else { addAutoLog(`❌ 매도 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error'); }
+        } finally { autoPlacingRef.current = false; setAutoPlacing(false); }
       }
     } catch (e) {
-      addAutoLog(`오류: ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
+      autoConsecErrorsRef.current++;
+      addAutoLog(`오류 (${autoConsecErrorsRef.current}회): ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
     }
-  }, [addAutoLog]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [addAutoLog, refreshKisTokenIfNeeded, loadAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startAutoTrade = useCallback(async () => {
     if (!canoRef.current) { addAutoLog('계좌번호를 먼저 입력하고 KIS에 연결하세요.', 'error'); return; }
@@ -683,6 +1009,14 @@ export default function KisVerificationPanel() {
       addAutoLog('캔들 로드 완료. 자동매매 시작!', 'success');
       autoEnabledRef.current = true;
       setAutoEnabled(true);
+      // localStorage에 활성 상태 저장 (새로고침 복구용)
+      try {
+        localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({
+          active: true, symbol: autoSymbolRef.current, qty: autoOrderQtyRef.current,
+          interval: autoCheckInterval, position: autoPositionRef.current,
+          serverType: kisServerTypeRef.current,
+        }));
+      } catch {}
       await runAutoCheck();
       const iv = parseInt(String(autoCheckInterval)) || 30;
       autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
@@ -695,13 +1029,377 @@ export default function KisVerificationPanel() {
     autoEnabledRef.current = false;
     setAutoEnabled(false);
     if (autoIntervalRef.current) { clearInterval(autoIntervalRef.current); autoIntervalRef.current = null; }
-    addAutoLog('자동매매 중지됨', 'warning');
+    addAutoLog('자동매매 중지됨 (수동)', 'warning');
+    try {
+      const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}');
+      localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, active: false }));
+    } catch {}
   }, [addAutoLog]);
 
   // 자동매매 활성 중 연결 끊기면 자동 중지
   useEffect(() => {
     if (connStatus !== 'connected' && autoEnabled) stopAutoTrade();
   }, [connStatus, autoEnabled, stopAutoTrade]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Toss 자동매매 functions
+  // ═══════════════════════════════════════════════════════════════════════════
+  const addTossAutoLog = useCallback((msg: string, type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning' = 'info') => {
+    const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setTossAutoLogs(prev => [{ id: ++tossAutoLogId.current, time, type, msg }, ...prev].slice(0, 200));
+  }, []);
+
+  const loadTossAutoCandles = useCallback(async () => {
+    setTossAutoLoadingCandles(true);
+    const code = tossAutoSymbolRef.current;
+    try {
+      // Try Toss candles API first
+      const tok = tossTokenRef.current;
+      if (tok) {
+        const res = await fetch(`/api/toss/candles?symbol=${code}&interval=1d&count=200`, {
+          headers: { 'x-toss-token': tok },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const items: any[] = data.result ?? data.candles ?? [];
+          if (items.length > 10) {
+            const bars: MarketBar[] = items.map((c: any) => ({
+              time: String(c.date ?? c.tradingDate ?? '').slice(5, 10),
+              timestamp: new Date(c.date ?? c.tradingDate ?? 0).getTime(),
+              open: Number(c.openPrice ?? c.open), high: Number(c.highPrice ?? c.high),
+              low: Number(c.lowPrice ?? c.low), close: Number(c.closePrice ?? c.close),
+              volume: Number(c.volume ?? 0),
+            })).filter(b => b.close > 0).reverse();
+            tossAutoCandlesRef.current = bars;
+            if (items.length > 0) {
+              const lastDate = (items[items.length - 1].date ?? items[items.length - 1].tradingDate ?? '').replace(/-/g, '').slice(0, 8);
+              tossAutoLastCandleDayRef.current = lastDate;
+            }
+            setTossAutoLoadingCandles(false);
+            return;
+          }
+        }
+      }
+      // Fallback: Naver Finance via Vite proxy
+      const res2 = await fetch(`/api/stock/${code}/candles?count=200`);
+      if (res2.ok) {
+        const candles: any[] = await res2.json();
+        if (Array.isArray(candles) && candles.length > 0) {
+          tossAutoCandlesRef.current = candles.map(c => ({
+            time: `${c.date.slice(4, 6)}/${c.date.slice(6, 8)}`,
+            timestamp: new Date(`${c.date.slice(0, 4)}-${c.date.slice(4, 6)}-${c.date.slice(6, 8)}T00:00:00+09:00`).getTime(),
+            open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+          }));
+          tossAutoLastCandleDayRef.current = candles[candles.length - 1].date;
+        }
+      }
+    } catch (e) {
+      addTossAutoLog(`캔들 로드 실패: ${e instanceof Error ? e.message : '오류'}`, 'error');
+    }
+    setTossAutoLoadingCandles(false);
+  }, [addTossAutoLog]);
+
+  const runTossAutoCheck = useCallback(async () => {
+    if (!tossAutoEnabledRef.current) return;
+
+    try {
+      // 0-a. 토큰 갱신
+      const tokenOk = await refreshTossTokenIfNeeded();
+      if (!tokenOk) { addTossAutoLog('유효한 토큰 없음 — 다음 주기 재시도', 'warning'); return; }
+
+      // 0-b. 새 거래일 캔들 갱신
+      const todayKst = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })
+        .replace(/\. /g, '').replace('.', '');
+      if (tossAutoLastCandleDayRef.current && tossAutoLastCandleDayRef.current !== todayKst) {
+        addTossAutoLog(`새 거래일 — 캔들 갱신 중…`, 'info');
+        try { await loadTossAutoCandles(); addTossAutoLog('캔들 갱신 완료', 'success'); } catch {}
+      }
+
+      const tok = tossTokenRef.current;
+      const seq = tossAccountSeqRef.current;
+
+      // 1. 현재가 조회
+      const pRes = await fetch(`/api/toss/prices?symbols=${tossAutoSymbolRef.current}`, {
+        headers: { 'x-toss-token': tok },
+      });
+      const pData = await pRes.json();
+      const priceItem = (pData.result ?? pData.prices ?? [])[0];
+      if (!priceItem) { addTossAutoLog('현재가 조회 실패', 'warning'); return; }
+      const currentPrice = Number(priceItem.lastPrice ?? priceItem.price ?? 0);
+      if (!currentPrice) return;
+      setTossAutoLastPrice(currentPrice);
+
+      // 2. 캔들 마지막 봉 업데이트
+      const bars = [...tossAutoCandlesRef.current];
+      if (bars.length === 0) { addTossAutoLog('캔들 데이터 없음. 재시작하세요.', 'warning'); return; }
+      bars[bars.length - 1] = { ...bars[bars.length - 1], close: currentPrice, high: Math.max(bars[bars.length - 1].high, currentPrice), low: Math.min(bars[bars.length - 1].low, currentPrice) };
+      tossAutoCandlesRef.current = bars;
+
+      // 3. 지표 계산 (AUTO_TRADE_CONFIG 기준)
+      const computed = computeIndicators(bars, AUTO_TRADE_CONFIG);
+      const n = computed.length;
+      if (n < 40) { addTossAutoLog('캔들 부족 (40개 미만)', 'warning'); return; }
+      const curr = computed[n - 1]; const prev = computed[n - 2]; const prev2 = computed[n - 3];
+
+      const currRsi = curr.rsi ?? 50; const currMacd = curr.macd ?? 0;
+      const currSig = curr.macdSignal ?? 0; const currHist = curr.macdHist ?? 0;
+      const prevHist = prev.macdHist ?? 0; const prevMacd = prev.macd ?? 0;
+      const prevSig = prev.macdSignal ?? 0;
+
+      const isGoldenCross = currMacd > currSig && prevMacd <= prevSig;
+      const isDeadCross   = currMacd < currSig && prevMacd >= prevSig;
+      const histIncreasing = currHist > prevHist && prevHist > (prev2.macdHist ?? 0);
+      const rsiRecentLow  = computed.slice(Math.max(0, n - AUTO_TRADE_CONFIG.rsiLookback - 1), n - 1).some(b => (b.rsi ?? 50) <= AUTO_TRADE_CONFIG.rsiOversold);
+      const rsiCondition  = rsiRecentLow && currRsi > AUTO_TRADE_CONFIG.rsiOversold;
+      const aboveMA = curr.ma20 != null ? currentPrice > curr.ma20 : false;
+      const volumeAboveAvg = curr.volumeMA != null ? (curr.volume ?? 0) > curr.volumeMA : false;
+
+      let buyScore = 0;
+      if (isGoldenCross)   buyScore += 2;
+      if (histIncreasing)  buyScore += 1;
+      if (rsiCondition)    buyScore += 2;
+      if (aboveMA)         buyScore += 1;
+      if (volumeAboveAvg)  buyScore += 1;
+
+      let signal: SignalClass = '관망';
+      if (isDeadCross && currRsi > AUTO_TRADE_CONFIG.rsiOverbought) signal = '위험';
+      else if (buyScore >= 5) signal = '매수후보';
+      else if (buyScore >= 3) signal = '관심';
+
+      setTossAutoSignal(signal);
+      setTossAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
+
+      addTossAutoLog(
+        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/7)`,
+        signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
+      );
+
+      // 4. 자동 주문
+      const position = tossAutoPositionRef.current;
+      if (signal === '매수후보' && !position && seq != null && !tossAutoPlacingRef.current) {
+        const qty = parseInt(tossAutoOrderQtyRef.current) || 1;
+        addTossAutoLog(`▶ 매수 신호 → ${qty}주 시장가 주문`, 'buy');
+        tossAutoPlacingRef.current = true; setTossAutoPlacing(true);
+        try {
+          const r = await fetch('/api/toss/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-toss-token': tok, 'x-toss-account-seq': String(seq) },
+            body: JSON.stringify({ symbol: tossAutoSymbolRef.current, side: 'BUY', orderType: 'MARKET', quantity: String(qty), currency: 'KRW' }),
+          });
+          const d = await r.json();
+          const ok = d.result?.orderId ?? d.orderId;
+          if (ok) {
+            const newPos = { qty, avgPrice: currentPrice };
+            tossAutoPositionRef.current = newPos; setTossAutoPosition(newPos);
+            addTossAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${ok})`, 'success');
+            try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:toss') ?? '{}'); localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...s, position: newPos })); } catch {}
+          } else { addTossAutoLog(`❌ 매수 실패: ${d.message ?? d.error ?? '오류'}`, 'error'); }
+        } finally { tossAutoPlacingRef.current = false; setTossAutoPlacing(false); }
+
+      } else if (signal === '위험' && position && seq != null && !tossAutoPlacingRef.current) {
+        addTossAutoLog(`▶ 매도 신호 → ${position.qty}주 시장가 주문`, 'sell');
+        tossAutoPlacingRef.current = true; setTossAutoPlacing(true);
+        try {
+          const r = await fetch('/api/toss/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-toss-token': tok, 'x-toss-account-seq': String(seq) },
+            body: JSON.stringify({ symbol: tossAutoSymbolRef.current, side: 'SELL', orderType: 'MARKET', quantity: String(position.qty), currency: 'KRW' }),
+          });
+          const d = await r.json();
+          const ok = d.result?.orderId ?? d.orderId;
+          const pct = ((currentPrice - position.avgPrice) / position.avgPrice * 100).toFixed(2);
+          if (ok) {
+            addTossAutoLog(`✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${currentPrice >= position.avgPrice ? '+' : ''}${pct}%)`, 'success');
+            tossAutoPositionRef.current = null; setTossAutoPosition(null);
+            try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:toss') ?? '{}'); localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...s, position: null })); } catch {}
+          } else { addTossAutoLog(`❌ 매도 실패: ${d.message ?? d.error ?? '오류'}`, 'error'); }
+        } finally { tossAutoPlacingRef.current = false; setTossAutoPlacing(false); }
+      }
+    } catch (e) {
+      tossAutoConsecErrorsRef.current++;
+      addTossAutoLog(`오류 (${tossAutoConsecErrorsRef.current}회): ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
+    }
+  }, [addTossAutoLog, refreshTossTokenIfNeeded, loadTossAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startTossAutoTrade = useCallback(async () => {
+    if (!tossTokenRef.current) { addTossAutoLog('토스증권에 먼저 연결하세요.', 'error'); return; }
+    addTossAutoLog(`${tossAutoSymbolRef.current} 일봉 200개 로드 중…`, 'info');
+    try {
+      await loadTossAutoCandles();
+      addTossAutoLog('캔들 로드 완료. 자동매매 시작!', 'success');
+      tossAutoEnabledRef.current = true;
+      setTossAutoEnabled(true);
+      try {
+        localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({
+          active: true, symbol: tossAutoSymbolRef.current, qty: tossAutoOrderQtyRef.current,
+          interval: tossAutoCheckInterval, position: tossAutoPositionRef.current,
+        }));
+      } catch {}
+      await runTossAutoCheck();
+      const iv = tossAutoCheckInterval || 30;
+      tossAutoIntervalRef.current = setInterval(runTossAutoCheck, iv * 1000);
+    } catch (e) {
+      addTossAutoLog(e instanceof Error ? e.message : '시작 실패', 'error');
+    }
+  }, [loadTossAutoCandles, runTossAutoCheck, addTossAutoLog, tossAutoCheckInterval]);
+
+  const stopTossAutoTrade = useCallback(() => {
+    tossAutoEnabledRef.current = false;
+    setTossAutoEnabled(false);
+    if (tossAutoIntervalRef.current) { clearInterval(tossAutoIntervalRef.current); tossAutoIntervalRef.current = null; }
+    addTossAutoLog('자동매매 중지됨 (수동)', 'warning');
+    try {
+      const s = JSON.parse(localStorage.getItem('tbbuilder:auto:toss') ?? '{}');
+      localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...s, active: false }));
+    } catch {}
+  }, [addTossAutoLog]);
+
+  useEffect(() => {
+    if (tossConnStatus !== 'connected' && tossAutoEnabled) stopTossAutoTrade();
+  }, [tossConnStatus, tossAutoEnabled, stopTossAutoTrade]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Kiwoom 신호 모니터 functions (Naver Finance 데이터 기반 — 실주문 불가)
+  // ═══════════════════════════════════════════════════════════════════════════
+  const addKiwoomAutoLog = useCallback((msg: string, type: 'info' | 'buy' | 'sell' | 'error' | 'warning' = 'info') => {
+    const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setKiwoomAutoLogs(prev => [{ id: ++kiwoomAutoLogId.current, time, type, msg }, ...prev].slice(0, 200));
+  }, []);
+
+  const loadKiwoomAutoCandles = useCallback(async () => {
+    setKiwoomAutoLoadingCandles(true);
+    const code = kiwoomAutoSymbolRef.current;
+    try {
+      const res = await fetch(`/api/stock/${code}/candles?count=200`);
+      if (res.ok) {
+        const candles: any[] = await res.json();
+        if (Array.isArray(candles) && candles.length > 0) {
+          kiwoomAutoCandlesRef.current = candles.map(c => ({
+            time: `${c.date.slice(4, 6)}/${c.date.slice(6, 8)}`,
+            timestamp: new Date(`${c.date.slice(0, 4)}-${c.date.slice(4, 6)}-${c.date.slice(6, 8)}T00:00:00+09:00`).getTime(),
+            open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+          }));
+          kiwoomAutoLastCandleDayRef.current = candles[candles.length - 1].date;
+        }
+      }
+    } catch (e) {
+      addKiwoomAutoLog(`캔들 로드 실패: ${e instanceof Error ? e.message : '오류'}`, 'error');
+    }
+    setKiwoomAutoLoadingCandles(false);
+  }, [addKiwoomAutoLog]);
+
+  const runKiwoomSignalCheck = useCallback(async () => {
+    if (!kiwoomAutoEnabledRef.current) return;
+    const code = kiwoomAutoSymbolRef.current;
+    try {
+      // 새 거래일 캔들 갱신
+      const todayKst = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })
+        .replace(/\. /g, '').replace('.', '');
+      if (kiwoomAutoLastCandleDayRef.current && kiwoomAutoLastCandleDayRef.current !== todayKst) {
+        try { await loadKiwoomAutoCandles(); } catch {}
+      }
+
+      // 네이버 금융 현재가
+      const pRes = await fetch(`/api/stock/${code}/candles?count=1`);
+      if (pRes.ok) {
+        const arr: any[] = await pRes.json();
+        if (arr.length > 0) {
+          const latest = arr[arr.length - 1];
+          const currentPrice = Number(latest.close ?? 0);
+          setKiwoomAutoLastPrice(currentPrice);
+
+          const bars = [...kiwoomAutoCandlesRef.current];
+          if (bars.length > 0) {
+            bars[bars.length - 1] = { ...bars[bars.length - 1], close: currentPrice, high: Math.max(bars[bars.length - 1].high, currentPrice), low: Math.min(bars[bars.length - 1].low, currentPrice) };
+            kiwoomAutoCandlesRef.current = bars;
+
+            const computed = computeIndicators(bars, AUTO_TRADE_CONFIG);
+            const n = computed.length;
+            if (n < 40) return;
+            const curr = computed[n - 1]; const prev = computed[n - 2]; const prev2 = computed[n - 3];
+
+            const currRsi = curr.rsi ?? 50; const currMacd = curr.macd ?? 0;
+            const currSig = curr.macdSignal ?? 0; const currHist = curr.macdHist ?? 0;
+            const prevHist = prev.macdHist ?? 0; const prevMacd = prev.macd ?? 0; const prevSig = prev.macdSignal ?? 0;
+
+            const isGoldenCross = currMacd > currSig && prevMacd <= prevSig;
+            const isDeadCross   = currMacd < currSig && prevMacd >= prevSig;
+            const histIncreasing = currHist > prevHist && prevHist > (prev2.macdHist ?? 0);
+            const rsiRecentLow  = computed.slice(Math.max(0, n - AUTO_TRADE_CONFIG.rsiLookback - 1), n - 1).some(b => (b.rsi ?? 50) <= AUTO_TRADE_CONFIG.rsiOversold);
+            const rsiCondition  = rsiRecentLow && currRsi > AUTO_TRADE_CONFIG.rsiOversold;
+            const aboveMA = curr.ma20 != null ? currentPrice > curr.ma20 : false;
+            const volumeAboveAvg = curr.volumeMA != null ? (curr.volume ?? 0) > curr.volumeMA : false;
+
+            let buyScore = 0;
+            if (isGoldenCross)  buyScore += 2;
+            if (histIncreasing) buyScore += 1;
+            if (rsiCondition)   buyScore += 2;
+            if (aboveMA)        buyScore += 1;
+            if (volumeAboveAvg) buyScore += 1;
+
+            let signal: SignalClass = '관망';
+            if (isDeadCross && currRsi > AUTO_TRADE_CONFIG.rsiOverbought) signal = '위험';
+            else if (buyScore >= 5) signal = '매수후보';
+            else if (buyScore >= 3) signal = '관심';
+
+            setKiwoomAutoSignal(signal);
+            setKiwoomAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
+
+            addKiwoomAutoLog(
+              `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/7)${signal === '매수후보' ? ' → Python 스크립트로 매수 실행' : signal === '위험' ? ' → Python 스크립트로 매도 실행' : ''}`,
+              signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
+            );
+          }
+        }
+      }
+    } catch (e) {
+      kiwoomAutoConsecErrorsRef.current++;
+      addKiwoomAutoLog(`오류 (${kiwoomAutoConsecErrorsRef.current}회): ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
+    }
+  }, [addKiwoomAutoLog, loadKiwoomAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startKiwoomSignalMonitor = useCallback(async () => {
+    addKiwoomAutoLog(`${kiwoomAutoSymbolRef.current} 일봉 200개 로드 중…`, 'info');
+    try {
+      await loadKiwoomAutoCandles();
+      addKiwoomAutoLog('캔들 로드 완료. 신호 모니터 시작!', 'info');
+      kiwoomAutoEnabledRef.current = true;
+      setKiwoomAutoEnabled(true);
+      try {
+        localStorage.setItem('tbbuilder:auto:kiwoom', JSON.stringify({
+          active: true, symbol: kiwoomAutoSymbolRef.current, interval: kiwoomAutoCheckInterval,
+        }));
+      } catch {}
+      await runKiwoomSignalCheck();
+      const iv = kiwoomAutoCheckInterval || 60;
+      kiwoomAutoIntervalRef.current = setInterval(runKiwoomSignalCheck, iv * 1000);
+    } catch (e) {
+      addKiwoomAutoLog(e instanceof Error ? e.message : '시작 실패', 'error');
+    }
+  }, [loadKiwoomAutoCandles, runKiwoomSignalCheck, addKiwoomAutoLog, kiwoomAutoCheckInterval]);
+
+  const stopKiwoomSignalMonitor = useCallback(() => {
+    kiwoomAutoEnabledRef.current = false;
+    setKiwoomAutoEnabled(false);
+    if (kiwoomAutoIntervalRef.current) { clearInterval(kiwoomAutoIntervalRef.current); kiwoomAutoIntervalRef.current = null; }
+    addKiwoomAutoLog('신호 모니터 중지됨 (수동)', 'warning');
+    try {
+      const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kiwoom') ?? '{}');
+      localStorage.setItem('tbbuilder:auto:kiwoom', JSON.stringify({ ...s, active: false }));
+    } catch {}
+  }, [addKiwoomAutoLog]);
+
+  // ── 탭 절전/활성 시 즉시 체크 (브라우저 타이머 쓰로틀링 대응) ─────────────────
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (autoEnabledRef.current)        { addAutoLog('탭 활성화 — 즉시 신호 확인', 'info');       runAutoCheck(); }
+      if (tossAutoEnabledRef.current)    { addTossAutoLog('탭 활성화 — 즉시 신호 확인', 'info');   runTossAutoCheck(); }
+      if (kiwoomAutoEnabledRef.current)  { addKiwoomAutoLog('탭 활성화 — 즉시 확인', 'info');       runKiwoomSignalCheck(); }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Credential save / clear helpers
@@ -1902,10 +2600,288 @@ if __name__ == "__main__":
   // Toss render functions
   // ═══════════════════════════════════════════════════════════════════════════
 
+  const renderTossAutoTrade = () => {
+    const signalColor: Record<SignalClass, string> = {
+      '매수후보': 'text-emerald-400 border-emerald-500 bg-emerald-950/30',
+      '관심':    'text-blue-400 border-blue-500 bg-blue-950/30',
+      '관망':    'text-slate-400 border-slate-600 bg-slate-900',
+      '위험':    'text-rose-400 border-rose-500 bg-rose-950/30',
+    };
+    const logColor: Record<string, string> = {
+      buy: 'text-emerald-400', sell: 'text-rose-400',
+      success: 'text-emerald-300', error: 'text-red-400',
+      warning: 'text-amber-400', info: 'text-slate-400',
+    };
+    return (
+      <div className="space-y-4">
+        <div className="p-3 bg-slate-950/60 border border-slate-700/50 rounded-xl text-[10px] text-slate-400 leading-relaxed space-y-1">
+          <p className="font-bold text-slate-300 text-[11px]">적용 전략: MACD 골든/데드크로스 + RSI 과매도 필터 (KIS 자동매매와 동일 로직)</p>
+          <p>① MACD 골든크로스 <span className="text-emerald-400">+2점</span> &nbsp; ② 히스토그램 증가 <span className="text-emerald-400">+1점</span></p>
+          <p>③ RSI 과매도 반등 <span className="text-emerald-400">+2점</span> &nbsp; ④ MA20 위 <span className="text-emerald-400">+1점</span> &nbsp; ⑤ 거래량 초과 <span className="text-emerald-400">+1점</span></p>
+          <p className="text-amber-400">▶ 5점 이상 → <strong>매수</strong> | RSI 과열 + 데드크로스 → <strong>매도</strong></p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">종목코드 (6자리)</label>
+            <input type="text" maxLength={6} value={tossAutoSymbol}
+              onChange={e => { const v = e.target.value.replace(/\D/g, ''); setTossAutoSymbol(v); }}
+              disabled={tossAutoEnabled} placeholder="예: 000660"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">1회 주문수량 (주)</label>
+            <input type="number" min="1" value={tossAutoOrderQty}
+              onChange={e => setTossAutoOrderQty(e.target.value)} disabled={tossAutoEnabled}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
+            <input type="number" min="10" max="300" value={tossAutoCheckInterval}
+              onChange={e => setTossAutoCheckInterval(parseInt(e.target.value) || 30)} disabled={tossAutoEnabled}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className={`p-3 rounded-xl border ${signalColor[tossAutoSignal]}`}>
+            <div className="text-[9px] font-bold mb-1 opacity-70">현재 신호</div>
+            <div className="text-sm font-black">{tossAutoSignal}</div>
+            {tossAutoIndicators && (
+              <div className="mt-1 text-[9px] opacity-80 space-y-0.5 font-mono">
+                <div>RSI: {tossAutoIndicators.rsi.toFixed(1)}</div>
+                <div>MACD: {tossAutoIndicators.macd.toFixed(2)} / Sig: {tossAutoIndicators.macdSig.toFixed(2)}</div>
+              </div>
+            )}
+          </div>
+          <div className={`p-3 rounded-xl border ${tossAutoPosition ? 'border-blue-600 bg-blue-950/20' : 'border-slate-700 bg-slate-900'}`}>
+            <div className="text-[9px] font-bold text-slate-400 mb-1">보유 포지션</div>
+            {tossAutoPosition ? (
+              <div className="text-[10px] font-mono space-y-0.5">
+                <div className="text-blue-300 font-bold">{tossAutoSymbol} {tossAutoPosition.qty}주</div>
+                <div className="text-slate-400">평균단가: {tossAutoPosition.avgPrice.toLocaleString()}원</div>
+                {tossAutoLastPrice > 0 && (
+                  <div className={tossAutoLastPrice >= tossAutoPosition.avgPrice ? 'text-emerald-400' : 'text-rose-400'}>
+                    현재: {tossAutoLastPrice.toLocaleString()}원 ({tossAutoLastPrice >= tossAutoPosition.avgPrice ? '+' : ''}{((tossAutoLastPrice - tossAutoPosition.avgPrice) / tossAutoPosition.avgPrice * 100).toFixed(2)}%)
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-[10px] text-slate-500">포지션 없음</div>
+            )}
+          </div>
+        </div>
+
+        {tossAutoLastPrice > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <Activity className="h-3.5 w-3.5 text-slate-500" />
+            <span className="text-slate-400">최근 조회:</span>
+            <span className="font-mono font-bold text-slate-100">{tossAutoLastPrice.toLocaleString()}원</span>
+            <span className="text-[9px] text-slate-600">{tossAutoSymbol}</span>
+          </div>
+        )}
+
+        {!tossAutoEnabled ? (
+          <button onClick={startTossAutoTrade}
+            disabled={tossConnStatus !== 'connected' || tossAutoLoadingCandles || tossAutoSymbol.length !== 6}
+            className="w-full py-2.5 rounded-xl text-sm font-bold bg-blue-700 hover:bg-blue-600 text-white transition flex items-center justify-center gap-2 disabled:opacity-40 cursor-pointer">
+            {tossAutoLoadingCandles
+              ? <><RefreshCw className="h-4 w-4 animate-spin" />캔들 로드 중…</>
+              : <><Bot className="h-4 w-4" />자동매매 시작 (토스증권)</>}
+          </button>
+        ) : (
+          <button onClick={stopTossAutoTrade}
+            className="w-full py-2.5 rounded-xl text-sm font-bold bg-rose-700 hover:bg-rose-600 text-white transition flex items-center justify-center gap-2 cursor-pointer">
+            {tossAutoPlacing
+              ? <><RefreshCw className="h-4 w-4 animate-spin" />주문 처리 중…</>
+              : <><StopCircle className="h-4 w-4" />자동매매 중지</>}
+          </button>
+        )}
+
+        {tossAutoPosition && tossAutoEnabled && tossAccountSeq != null && (
+          <button
+            onClick={async () => {
+              const qty = tossAutoPosition?.qty ?? 0;
+              if (!qty) return;
+              addTossAutoLog(`▶ 수동 매도 → ${qty}주`, 'sell');
+              setTossAutoPlacing(true);
+              const r = await fetch('/api/toss/order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-toss-token': tossTokenRef.current, 'x-toss-account-seq': String(tossAccountSeqRef.current) },
+                body: JSON.stringify({ symbol: tossAutoSymbolRef.current, side: 'SELL', orderType: 'MARKET', quantity: String(qty), currency: 'KRW' }),
+              });
+              const d = await r.json();
+              const ok = d.result?.orderId ?? d.orderId;
+              if (ok) { addTossAutoLog(`✅ 수동 매도 완료 (${ok})`, 'success'); tossAutoPositionRef.current = null; setTossAutoPosition(null); }
+              else     addTossAutoLog(`❌ 수동 매도 실패: ${d.message ?? '오류'}`, 'error');
+              setTossAutoPlacing(false);
+            }}
+            disabled={tossAutoPlacing}
+            className="w-full py-1.5 rounded-xl text-xs font-bold bg-amber-800/60 hover:bg-amber-700/80 text-amber-300 border border-amber-700/40 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
+            <TrendingDown className="h-3.5 w-3.5" />지금 즉시 매도 (수동)
+          </button>
+        )}
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold text-slate-400">실행 로그</span>
+            <button onClick={() => setTossAutoLogs([])} className="text-[9px] text-slate-600 hover:text-slate-400 cursor-pointer">지우기</button>
+          </div>
+          <div className="h-52 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2 space-y-0.5 font-mono text-[10px]">
+            {tossAutoLogs.length === 0
+              ? <p className="text-slate-600 p-2">자동매매를 시작하면 로그가 표시됩니다.</p>
+              : tossAutoLogs.map(l => (
+                  <div key={l.id} className="flex gap-2">
+                    <span className="text-slate-600 shrink-0">{l.time}</span>
+                    <span className={logColor[l.type] ?? 'text-slate-400'}>{l.msg}</span>
+                  </div>
+                ))
+            }
+          </div>
+        </div>
+
+        {tossConnStatus !== 'connected' && (
+          <div className="p-2 bg-amber-950/30 border border-amber-800/40 rounded-lg text-[10px] text-amber-400 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            토스증권에 먼저 연결하세요.
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderKiwoomAutoTrade = () => {
+    const signalColor: Record<SignalClass, string> = {
+      '매수후보': 'text-emerald-400 border-emerald-500 bg-emerald-950/30',
+      '관심':    'text-blue-400 border-blue-500 bg-blue-950/30',
+      '관망':    'text-slate-400 border-slate-600 bg-slate-900',
+      '위험':    'text-rose-400 border-rose-500 bg-rose-950/30',
+    };
+    const logColor: Record<string, string> = {
+      buy: 'text-emerald-400', sell: 'text-rose-400',
+      error: 'text-red-400', warning: 'text-amber-400', info: 'text-slate-400',
+    };
+    const pythonCode = `# 키움증권 자동매매 실행 코드 (Windows 32bit 전용)
+# 신호: ${kiwoomAutoSignal} | 종목: ${kiwoomAutoSymbol} | 현재가: ${kiwoomAutoLastPrice.toLocaleString()}원
+import win32com.client
+import time
+
+LOGIN_ID  = "키움증권아이디"
+ACCOUNT   = "${kiwoomAccountNo || '계좌번호10자리'}"  # 계좌번호
+SYMBOL    = "${kiwoomAutoSymbol}"
+QTY       = 1          # 주문수량
+ORDER_TYPE = 1         # 1=신규매수, 2=신규매도
+ORD_TYPE   = 3         # 3=시장가
+
+kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
+# ... (OpenAPI+ 전체 코드는 파이썬 코드 탭 참고)
+# 신호가 '매수후보'일 때 아래 실행:
+# kiwoom.SendOrder("자동매수", "0101", ACCOUNT, ORDER_TYPE, SYMBOL, QTY, 0, ORD_TYPE, "")
+`;
+    return (
+      <div className="space-y-4">
+        <div className="p-3 bg-amber-950/30 border border-amber-700/40 rounded-xl text-[10px] text-amber-300 leading-relaxed space-y-1">
+          <p className="font-bold text-[11px]">⚠ 키움증권 신호 모니터 (실주문 제한)</p>
+          <p>키움 OpenAPI+는 Windows 32비트 전용 COM 컴포넌트이므로 이 브라우저 앱에서 직접 주문할 수 없습니다.</p>
+          <p>아래에서 <strong>MACD+RSI 매수/매도 신호</strong>를 실시간으로 확인하고, 신호 발생 시 Windows Python 스크립트를 직접 실행하세요.</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">종목코드 (6자리)</label>
+            <input type="text" maxLength={6} value={kiwoomAutoSymbol}
+              onChange={e => setKiwoomAutoSymbol(e.target.value.replace(/\D/g, ''))}
+              disabled={kiwoomAutoEnabled} placeholder="예: 000660"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
+            <input type="number" min="30" max="600" value={kiwoomAutoCheckInterval}
+              onChange={e => setKiwoomAutoCheckInterval(parseInt(e.target.value) || 60)} disabled={kiwoomAutoEnabled}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className={`p-3 rounded-xl border ${signalColor[kiwoomAutoSignal]}`}>
+            <div className="text-[9px] font-bold mb-1 opacity-70">현재 신호 (Naver 데이터)</div>
+            <div className="text-sm font-black">{kiwoomAutoSignal}</div>
+            {kiwoomAutoIndicators && (
+              <div className="mt-1 text-[9px] opacity-80 space-y-0.5 font-mono">
+                <div>RSI: {kiwoomAutoIndicators.rsi.toFixed(1)}</div>
+                <div>MACD: {kiwoomAutoIndicators.macd.toFixed(2)} / Sig: {kiwoomAutoIndicators.macdSig.toFixed(2)}</div>
+              </div>
+            )}
+          </div>
+          <div className="p-3 rounded-xl border border-slate-700 bg-slate-900">
+            <div className="text-[9px] font-bold text-slate-400 mb-1">데이터 소스</div>
+            <div className="text-[10px] text-slate-300 space-y-1 font-mono">
+              <div>종목: <span className="text-slate-100 font-bold">{kiwoomAutoSymbol}</span></div>
+              {kiwoomAutoLastPrice > 0 && <div>현재가: <span className="text-slate-100 font-bold">{kiwoomAutoLastPrice.toLocaleString()}원</span></div>}
+              <div className="text-emerald-400 text-[9px]">네이버 금융 일봉</div>
+            </div>
+          </div>
+        </div>
+
+        {!kiwoomAutoEnabled ? (
+          <button onClick={startKiwoomSignalMonitor}
+            disabled={kiwoomAutoLoadingCandles || kiwoomAutoSymbol.length !== 6}
+            className="w-full py-2.5 rounded-xl text-sm font-bold bg-emerald-700 hover:bg-emerald-600 text-white transition flex items-center justify-center gap-2 disabled:opacity-40 cursor-pointer">
+            {kiwoomAutoLoadingCandles
+              ? <><RefreshCw className="h-4 w-4 animate-spin" />캔들 로드 중…</>
+              : <><Activity className="h-4 w-4" />신호 모니터 시작</>}
+          </button>
+        ) : (
+          <button onClick={stopKiwoomSignalMonitor}
+            className="w-full py-2.5 rounded-xl text-sm font-bold bg-rose-700 hover:bg-rose-600 text-white transition flex items-center justify-center gap-2 cursor-pointer">
+            <StopCircle className="h-4 w-4" />신호 모니터 중지
+          </button>
+        )}
+
+        {kiwoomAutoSignal !== '관망' && (
+          <div className={`p-3 rounded-xl border text-[10px] leading-relaxed ${kiwoomAutoSignal === '매수후보' ? 'border-emerald-700/50 bg-emerald-950/20 text-emerald-300' : 'border-rose-700/50 bg-rose-950/20 text-rose-300'}`}>
+            <p className="font-bold mb-1">{kiwoomAutoSignal === '매수후보' ? '🟢 매수 신호 발생!' : kiwoomAutoSignal === '관심' ? '🔵 관심 종목' : '🔴 매도 신호 발생!'}</p>
+            <p>Windows에서 Python 스크립트를 실행하여 키움 OpenAPI+로 주문하세요. (아래 파이썬 코드 탭 참고)</p>
+          </div>
+        )}
+
+        {/* Python 코드 스니펫 */}
+        <div>
+          <p className="text-[10px] font-bold text-slate-400 mb-1.5">현재 신호 기반 Python 실행 코드 (복사 후 Windows에서 실행)</p>
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[10px] text-slate-300 overflow-x-auto">
+            <pre className="whitespace-pre">{pythonCode}</pre>
+          </div>
+          <button onClick={() => navigator.clipboard.writeText(pythonCode)}
+            className="mt-1.5 flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer">
+            <Copy className="h-3 w-3" />Python 코드 복사
+          </button>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold text-slate-400">신호 로그</span>
+            <button onClick={() => setKiwoomAutoLogs([])} className="text-[9px] text-slate-600 hover:text-slate-400 cursor-pointer">지우기</button>
+          </div>
+          <div className="h-44 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2 space-y-0.5 font-mono text-[10px]">
+            {kiwoomAutoLogs.length === 0
+              ? <p className="text-slate-600 p-2">신호 모니터를 시작하면 로그가 표시됩니다.</p>
+              : kiwoomAutoLogs.map(l => (
+                  <div key={l.id} className="flex gap-2">
+                    <span className="text-slate-600 shrink-0">{l.time}</span>
+                    <span className={logColor[l.type] ?? 'text-slate-400'}>{l.msg}</span>
+                  </div>
+                ))
+            }
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderTossSubTabNav = () => (
     <div className="flex border-b border-slate-800 text-xs mb-5">
-      {(['account', 'trade', 'history', 'script'] as TossSubTab[]).map((id) => {
-        const label = { account: '잔고/보유주식', trade: '실거래 주문', history: '체결/미체결', script: '파이썬 코드' }[id];
+      {(['account', 'trade', 'history', 'script', 'auto'] as TossSubTab[]).map((id) => {
+        const label = { account: '잔고/보유주식', trade: '실거래 주문', history: '체결/미체결', script: '파이썬 코드', auto: '🤖 자동매매' }[id];
         return (
           <button key={id} onClick={() => setTossSubTab(id)}
             className={`pb-2.5 px-4 font-bold transition border-b-2 cursor-pointer whitespace-nowrap ${
@@ -2458,10 +3434,44 @@ if __name__ == "__main__":
   // ═══════════════════════════════════════════════════════════════════════════
   // RENDER
   // ═══════════════════════════════════════════════════════════════════════════
+  const anyAutoActive = autoEnabled || tossAutoEnabled || kiwoomAutoEnabled;
+
   return (
     <div className="space-y-6">
       {orderConfirm && <OrderConfirmModal />}
       {tossOrderConfirm && <TossOrderConfirmModal />}
+
+      {/* 전역 자동매매 실행 중 배너 */}
+      {anyAutoActive && (
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-emerald-950/50 border border-emerald-700/60 rounded-2xl text-xs font-bold text-emerald-300 shadow-lg">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            자동매매 실행 중
+          </span>
+          <span className="text-slate-500">|</span>
+          {autoEnabled && (
+            <span className="flex items-center gap-1">
+              <Bot className="h-3.5 w-3.5" />
+              KIS — {autoSymbol} · {autoCheckInterval}s
+              {autoPosition && <span className="ml-1 text-emerald-400">({autoPosition.qty}주 보유)</span>}
+            </span>
+          )}
+          {tossAutoEnabled && (
+            <span className="flex items-center gap-1">
+              <Bot className="h-3.5 w-3.5" />
+              Toss — {tossAutoSymbol} · {tossAutoCheckInterval}s
+              {tossAutoPosition && <span className="ml-1 text-emerald-400">({tossAutoPosition.qty}주 보유)</span>}
+            </span>
+          )}
+          {kiwoomAutoEnabled && (
+            <span className="flex items-center gap-1">
+              <Activity className="h-3.5 w-3.5" />
+              Kiwoom 신호 — {kiwoomAutoSymbol} · {kiwoomAutoCheckInterval}s
+            </span>
+          )}
+          <span className="ml-auto text-[10px] font-normal text-emerald-600">새로고침 후 자동 복구됩니다</span>
+        </div>
+      )}
 
       {/* Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -2605,15 +3615,20 @@ if __name__ == "__main__":
 
           <div className="lg:col-span-7 flex flex-col space-y-4">
             <div className="flex border-b border-slate-800 text-xs">
-              {([['interactive', 'API 연동 터미널'], ['script', '파이썬 즉시 실행 코드']] as const).map(([id, label]) => (
-                <button key={id} onClick={() => setMockActiveTab(id)}
-                  className={`pb-2.5 px-4 font-bold transition border-b-2 cursor-pointer ${
-                    mockActiveTab === id ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+              {([['interactive', 'API 연동 터미널'], ['script', '파이썬 즉시 실행 코드'], ['auto', '🤖 자동매매 신호']] as const).map(([id, label]) => (
+                <button key={id} onClick={() => setKiwoomSubTab(id as KiwoomSubTab)}
+                  className={`pb-2.5 px-4 font-bold transition border-b-2 cursor-pointer whitespace-nowrap ${
+                    kiwoomSubTab === id ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
                   }`}>{label}</button>
               ))}
             </div>
-            <div className="flex-1 bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-h-[380px] flex flex-col">
-              {mockActiveTab === 'interactive' ? (
+            {kiwoomSubTab === 'auto' && (
+              <div className="flex-1 overflow-y-auto">
+                {renderKiwoomAutoTrade()}
+              </div>
+            )}
+            <div className={`flex-1 bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-h-[380px] flex flex-col ${kiwoomSubTab === 'auto' ? 'hidden' : ''}`}>
+              {kiwoomSubTab === 'interactive' ? (
                 <div className="flex-1 flex flex-col h-full">
                   <div className="bg-slate-900 px-4 py-2.5 border-b border-slate-800 flex justify-between items-center text-[10px] font-mono text-slate-400">
                     <div className="flex items-center gap-1.5">
@@ -2694,6 +3709,7 @@ if __name__ == "__main__":
             {tossSubTab === 'trade'    && renderTossTrade()}
             {tossSubTab === 'history'  && renderTossHistory()}
             {tossSubTab === 'script'   && renderTossScript()}
+            {tossSubTab === 'auto'     && renderTossAutoTrade()}
           </div>
         </div>
       )}
