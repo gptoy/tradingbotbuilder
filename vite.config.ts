@@ -35,6 +35,44 @@ function naverStockPlugin(): Plugin {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? '';
 
+        // ── GET /api/market/indices — KOSPI, KOSDAQ, USD/KRW ─────────
+        if (url === '/api/market/indices') {
+          try {
+            const fetchIndex = async (sym: string) => {
+              const buf = await naverGet(`https://m.stock.naver.com/api/index/${sym}/basic`);
+              const d = JSON.parse(buf.toString('utf-8'));
+              return {
+                name: d.indexName ?? sym,
+                price: parseFloat((d.closePrice ?? '0').replace(/,/g, '')),
+                change: parseFloat((d.compareToPreviousClosePrice ?? '0').replace(/,/g, '')),
+                changeRate: parseFloat(d.fluctuationsRatio ?? '0'),
+                direction: d.compareToPreviousPrice?.code ?? '3',
+                marketStatus: d.marketStatus ?? 'UNKNOWN',
+              };
+            };
+            const fetchFx = async () => {
+              const buf = await naverGet('https://m.stock.naver.com/api/index/FX_USDKRW/basic');
+              const d = JSON.parse(buf.toString('utf-8'));
+              return {
+                name: 'USD/KRW',
+                price: parseFloat((d.closePrice ?? '0').replace(/,/g, '')),
+                change: parseFloat((d.compareToPreviousClosePrice ?? '0').replace(/,/g, '')),
+                changeRate: parseFloat(d.fluctuationsRatio ?? '0'),
+                direction: d.compareToPreviousPrice?.code ?? '3',
+              };
+            };
+            const [kospi, kosdaq, usdkrw] = await Promise.all([
+              fetchIndex('KOSPI'), fetchIndex('KOSDAQ'), fetchFx(),
+            ]);
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify({ kospi, kosdaq, usdkrw, ts: Date.now() }));
+          } catch (e) {
+            res.statusCode = 500;
+            res.end(JSON.stringify({ error: String(e) }));
+          }
+          return;
+        }
+
         // ── GET /api/stock/:code/current ──────────────────────────────
         const curMatch = url.match(/^\/api\/stock\/([^/?]+)\/current/);
         if (curMatch) {
