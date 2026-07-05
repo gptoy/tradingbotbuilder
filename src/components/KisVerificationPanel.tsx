@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { computeIndicators } from '../utils';
 import type { MarketBar, BotConfig, SignalClass } from '../types';
+import AutoTradeChart, { TradeMarker } from './AutoTradeChart';
 
 type Broker = 'kis' | 'kiwoom' | 'toss';
 type KisSubTab = 'account' | 'trade' | 'history' | 'script' | 'auto';
@@ -2421,8 +2422,32 @@ if __name__ == "__main__":
       warning: 'text-amber-400', info: 'text-slate-400',
     };
 
+    const kisTradeMarkers: TradeMarker[] = autoLogs
+      .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
+      .map(l => {
+        const priceMatch = l.msg.match(/@ ([\d,]+)원/);
+        const price = priceMatch ? parseInt(priceMatch[1].replace(/,/g, '')) : 0;
+        const [h, m, s] = l.time.split(':').map(Number);
+        const d = new Date(); d.setHours(h, m, s, 0);
+        return { timestamp: d.getTime(), type: l.msg.includes('매수') ? 'BUY' as const : 'SELL' as const, price };
+      })
+      .filter(m => m.price > 0);
+
     return (
       <div className="space-y-4">
+        {/* 차트 */}
+        {autoSymbol.length === 6 && (
+          <AutoTradeChart
+            symbol={autoSymbol}
+            position={autoPosition}
+            signal={autoSignal}
+            lastPrice={autoLastPrice}
+            tradeMarkers={kisTradeMarkers}
+            stopLossPct={2.5}
+            takeProfitPct={7.0}
+          />
+        )}
+
         {/* 전략 안내 */}
         <div className="p-3 bg-slate-950/60 border border-slate-700/50 rounded-xl text-[10px] text-slate-400 leading-relaxed space-y-1">
           <p className="font-bold text-slate-300 text-[11px]">적용 전략: MACD 골든/데드크로스 + RSI 과매도 필터 (시뮬레이터 동일 로직)</p>
@@ -2612,8 +2637,33 @@ if __name__ == "__main__":
       success: 'text-emerald-300', error: 'text-red-400',
       warning: 'text-amber-400', info: 'text-slate-400',
     };
+
+    const tossTradeMarkers: TradeMarker[] = tossAutoLogs
+      .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
+      .map(l => {
+        const priceMatch = l.msg.match(/@ ([\d,]+)원/);
+        const price = priceMatch ? parseInt(priceMatch[1].replace(/,/g, '')) : 0;
+        const [h, m, s] = l.time.split(':').map(Number);
+        const d = new Date(); d.setHours(h, m, s, 0);
+        return { timestamp: d.getTime(), type: l.msg.includes('매수') ? 'BUY' as const : 'SELL' as const, price };
+      })
+      .filter(m => m.price > 0);
+
     return (
       <div className="space-y-4">
+        {/* 차트 */}
+        {tossAutoSymbol.length === 6 && (
+          <AutoTradeChart
+            symbol={tossAutoSymbol}
+            position={tossAutoPosition}
+            signal={tossAutoSignal}
+            lastPrice={tossAutoLastPrice}
+            tradeMarkers={tossTradeMarkers}
+            stopLossPct={2.5}
+            takeProfitPct={7.0}
+          />
+        )}
+
         <div className="p-3 bg-slate-950/60 border border-slate-700/50 rounded-xl text-[10px] text-slate-400 leading-relaxed space-y-1">
           <p className="font-bold text-slate-300 text-[11px]">적용 전략: MACD 골든/데드크로스 + RSI 과매도 필터 (KIS 자동매매와 동일 로직)</p>
           <p>① MACD 골든크로스 <span className="text-emerald-400">+2점</span> &nbsp; ② 히스토그램 증가 <span className="text-emerald-400">+1점</span></p>
@@ -2780,6 +2830,17 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
 `;
     return (
       <div className="space-y-4">
+        {/* 차트 */}
+        {kiwoomAutoSymbol.length === 6 && (
+          <AutoTradeChart
+            symbol={kiwoomAutoSymbol}
+            signal={kiwoomAutoSignal}
+            lastPrice={kiwoomAutoLastPrice}
+            stopLossPct={2.5}
+            takeProfitPct={7.0}
+          />
+        )}
+
         <div className="p-3 bg-amber-950/30 border border-amber-700/40 rounded-xl text-[10px] text-amber-300 leading-relaxed space-y-1">
           <p className="font-bold text-[11px]">⚠ 키움증권 신호 모니터 (실주문 제한)</p>
           <p>키움 OpenAPI+는 Windows 32비트 전용 COM 컴포넌트이므로 이 브라우저 앱에서 직접 주문할 수 없습니다.</p>

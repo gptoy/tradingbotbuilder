@@ -109,31 +109,34 @@ function naverStockPlugin(): Plugin {
           return;
         }
 
-        // ── GET /api/stock/:code/candles?count=N ──────────────────────
+        // ── GET /api/stock/:code/candles?count=N&timeframe=day|week|month|minute ─
         const candleMatch = url.match(/^\/api\/stock\/([^/?]+)\/candles/);
         if (candleMatch) {
           const code = decodeURIComponent(candleMatch[1]);
-          const countMatch = url.match(/count=(\d+)/);
-          const count = countMatch ? Number(countMatch[1]) : 100;
+          const qp = new URLSearchParams(url.split('?')[1] ?? '');
+          const count = Number(qp.get('count') ?? '100');
+          const timeframe = qp.get('timeframe') ?? 'day'; // day | week | month | minute
           try {
             const buf = await naverGet(
-              `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=${count}&requestType=0`,
+              `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=${timeframe}&count=${count}&requestType=0`,
             );
             // fchart may be EUC-KR — data attributes are ASCII, latin1 is safe
             const text = buf.toString('latin1');
             const matches = [...text.matchAll(/data="([^"]+)"/g)];
+            const pv = (s: string, fallback = 0) => { const v = parseInt(s); return isNaN(v) ? fallback : v; };
             const candles = matches
               .map((m) => {
                 const parts = m[1].split('|');
                 if (parts.length < 6) return null;
-                const [date, open, high, low, close, volume] = parts;
+                const [date, rawOpen, rawHigh, rawLow, rawClose, rawVol] = parts;
+                const close = pv(rawClose);
                 return {
                   date,
-                  open: parseInt(open) || 0,
-                  high: parseInt(high) || 0,
-                  low: parseInt(low) || 0,
-                  close: parseInt(close) || 0,
-                  volume: parseInt(volume) || 0,
+                  open:   pv(rawOpen,  close),  // 분봉은 null → close로 대체
+                  high:   pv(rawHigh,  close),
+                  low:    pv(rawLow,   close),
+                  close,
+                  volume: pv(rawVol),
                 };
               })
               .filter(
