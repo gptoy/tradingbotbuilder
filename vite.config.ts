@@ -430,8 +430,8 @@ function kisApiPlugin(): Plugin {
             const raw = await readBody(req);
             const { cano, acntPrdtCd, pdno, ordDvsn, ordQty, ordUnpr, side } = JSON.parse(raw);
             const trId = isReal
-              ? (side === 'buy' ? 'TTTC0802U' : 'TTTC0801U')
-              : (side === 'buy' ? 'VTTC0802U' : 'VTTC0801U');
+              ? (side === 'buy' ? 'TTTC0012U' : 'TTTC0011U')
+              : (side === 'buy' ? 'VTTC0012U' : 'VTTC0011U');
             const result = await kisHttpRequest('POST', hostname, port,
               '/uapi/domestic-stock/v1/trading/order-cash',
               { ...authHdr, tr_id: trId },
@@ -439,6 +439,7 @@ function kisApiPlugin(): Plugin {
                 CANO: cano, ACNT_PRDT_CD: acntPrdtCd,
                 PDNO: pdno, ORD_DVSN: ordDvsn,
                 ORD_QTY: String(ordQty), ORD_UNPR: String(ordUnpr ?? 0),
+                EXCG_ID_DVSN_CD: 'KRX',
               }),
             );
             res.statusCode = result.statusCode;
@@ -450,7 +451,7 @@ function kisApiPlugin(): Plugin {
           if (url === '/api/kis/order' && req.method === 'DELETE') {
             const raw = await readBody(req);
             const { cano, acntPrdtCd, orgOdno, orgBrno, ordDvsn, ordQty } = JSON.parse(raw);
-            const trId = isReal ? 'TTTC0803U' : 'VTTC0803U';
+            const trId = isReal ? 'TTTC0013U' : 'VTTC0013U';
             const result = await kisHttpRequest('POST', hostname, port,
               '/uapi/domestic-stock/v1/trading/order-rvsecncl',
               { ...authHdr, tr_id: trId },
@@ -460,7 +461,7 @@ function kisApiPlugin(): Plugin {
                 ORGN_ODNO: orgOdno, ORD_DVSN: ordDvsn ?? '00',
                 RVSE_CNCL_DVSN_CD: '02',
                 ORD_QTY: String(ordQty), QTY_ALL_ORD_YN: 'Y',
-                ORGN_ORD_UNPR: '0',
+                ORD_UNPR: '0', EXCG_ID_DVSN_CD: 'KRX',
               }),
             );
             res.statusCode = result.statusCode;
@@ -472,7 +473,7 @@ function kisApiPlugin(): Plugin {
           if (url.startsWith('/api/kis/orders') && req.method === 'GET') {
             const p = new URLSearchParams(url.split('?')[1] ?? '');
             const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-            const trId = isReal ? 'TTTC8001R' : 'VTTC8001R';
+            const trId = isReal ? 'TTTC0081R' : 'VTTC0081R';
             const qp = new URLSearchParams({
               CANO: p.get('cano') ?? '', ACNT_PRDT_CD: p.get('acntPrdtCd') ?? '01',
               INQR_STRT_DT: p.get('startDt') ?? today,
@@ -494,7 +495,7 @@ function kisApiPlugin(): Plugin {
           // ── GET /api/kis/pending — 미체결 잔량 ─────────────────────
           if (url.startsWith('/api/kis/pending') && req.method === 'GET') {
             const p = new URLSearchParams(url.split('?')[1] ?? '');
-            const trId = isReal ? 'TTTC8036R' : 'VTTC8036R';
+            const trId = 'TTTC0084R'; // 모의/실전 동일 TR ID
             const qp = new URLSearchParams({
               CANO: p.get('cano') ?? '', ACNT_PRDT_CD: p.get('acntPrdtCd') ?? '01',
               INQR_DVSN_1: '', INQR_DVSN_2: '00',

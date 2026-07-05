@@ -794,8 +794,8 @@ def get_balance(token):
     return data
 
 def place_order(token, code, qty, side="buy", ord_dvsn="01", price=0):
-    tr_id = ("TTTC0802U" if IS_LIVE else "VTTC0802U") if side == "buy" \\
-        else ("TTTC0801U" if IS_LIVE else "VTTC0801U")
+    tr_id = ("TTTC0012U" if IS_LIVE else "VTTC0012U") if side == "buy" \\
+        else ("TTTC0011U" if IS_LIVE else "VTTC0011U")
     headers = {
         "Authorization": f"Bearer {token}",
         "appkey": APP_KEY, "appsecret": APP_SECRET,
@@ -805,6 +805,7 @@ def place_order(token, code, qty, side="buy", ord_dvsn="01", price=0):
         "CANO": CANO, "ACNT_PRDT_CD": ACNT_PRDT,
         "PDNO": code, "ORD_DVSN": ord_dvsn,
         "ORD_QTY": str(qty), "ORD_UNPR": str(price),
+        "EXCG_ID_DVSN_CD": "KRX",
     }
     res = requests.post(f"{BASE_URL}/uapi/domestic-stock/v1/trading/order-cash",
         json=body, headers=headers, verify=False)
