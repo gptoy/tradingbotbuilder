@@ -193,7 +193,7 @@ export default function KisVerificationPanel() {
   const [autoPlacing, setAutoPlacing]             = useState(false);
   const [autoCheckInterval, setAutoCheckInterval] = useState(30); // seconds
 
-  // refs — 인터벌 콜백에서 최신 값에 접근
+  // refs — 인터벌 콜백에서 최신 값에 접근 (stale closure 방지)
   const autoEnabledRef    = useRef(false);
   const autoSymbolRef     = useRef('000660');
   const autoCandlesRef    = useRef<MarketBar[]>([]);
@@ -202,6 +202,8 @@ export default function KisVerificationPanel() {
   const autoIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const kisTokenRef       = useRef('');
   const kisServerTypeRef  = useRef<'virtual' | 'real'>('virtual');
+  const kisAppKeyRef      = useRef('');
+  const kisAppSecretRef   = useRef('');
   const canoRef           = useRef('');
   const acntPrdtCdRef     = useRef('01');
   let autoLogId = useRef(0);
@@ -312,6 +314,7 @@ export default function KisVerificationPanel() {
   // refs 최신값 동기화
   useEffect(() => { kisTokenRef.current = kisToken; }, [kisToken]);
   useEffect(() => { kisServerTypeRef.current = kisServerType; }, [kisServerType]);
+  useEffect(() => { kisAppKeyRef.current = kisAppKey; kisAppSecretRef.current = kisAppSecret; }, [kisAppKey, kisAppSecret]);
   useEffect(() => { canoRef.current = cano; acntPrdtCdRef.current = acntPrdtCd; }, [cano, acntPrdtCd]);
   useEffect(() => { autoOrderQtyRef.current = autoOrderQty; }, [autoOrderQty]);
   useEffect(() => { autoSymbolRef.current = autoSymbol; }, [autoSymbol]);
@@ -327,8 +330,8 @@ export default function KisVerificationPanel() {
   const kisHeadersFromRef = () => ({
     'Content-Type': 'application/json',
     'x-kis-token': kisTokenRef.current,
-    'x-kis-appkey': kisServerTypeRef.current === 'real' ? kisRealAppKey : kisVirtualAppKey,
-    'x-kis-appsecret': kisServerTypeRef.current === 'real' ? kisRealAppSecret : kisVirtualAppSecret,
+    'x-kis-appkey': kisAppKeyRef.current,
+    'x-kis-appsecret': kisAppSecretRef.current,
     'x-kis-server': kisServerTypeRef.current,
   });
 
