@@ -6,7 +6,7 @@ import {
   Package, Clock, ChevronDown, ChevronUp, Zap, Save, Trash2,
   Bot, StopCircle, Activity, BarChart2
 } from 'lucide-react';
-import { computeIndicators } from '../utils';
+import { computeIndicators, detectBearishDivergence, calcSwingLow } from '../utils';
 import type { MarketBar, BotConfig, SignalClass } from '../types';
 import AutoTradeChart, { TradeMarker } from './AutoTradeChart';
 
@@ -194,6 +194,12 @@ export default function KisVerificationPanel() {
   const [autoLogs, setAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning'; msg: string }[]>([]);
   const [autoPlacing, setAutoPlacing]             = useState(false);
   const [autoCheckInterval, setAutoCheckInterval] = useState(30); // seconds
+
+  // ── 장 시간 자동 스케줄러 ──────────────────────────────────────────────────
+  const [autoScheduleEnabled, setAutoScheduleEnabled] = useState(false);
+  const [schedulerStatus, setSchedulerStatus]         = useState<'idle' | 'waiting' | 'active' | 'closed'>('idle');
+  const autoScheduleEnabledRef = useRef(false);
+  const schedulerIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // refs — 인터벌 콜백에서 최신 값에 접근 (stale closure 방지)
   const autoEnabledRef    = useRef(false);
@@ -610,6 +616,16 @@ export default function KisVerificationPanel() {
         expiry.setSeconds(expiry.getSeconds() + (data.expires_in ?? 86400));
         setTokenExpiry(expiry);
         setConnStatus('connected');
+        // 시뮬레이터 실제매매 연동용 세션 저장
+        try {
+          const acct = kisAccountNo.trim();
+          localStorage.setItem('tbbuilder:kis:live-session', JSON.stringify({
+            token: data.access_token,
+            appKey: kisAppKey, appSecret: kisAppSecret,
+            cano: acct.slice(0, 8), acntPrdtCd: acct.slice(-2),
+            serverType: kisServerType, savedAt: Date.now(),
+          }));
+        } catch {}
         // Auto-load balance after connecting
         await fetchBalance(data.access_token);
       } else {
@@ -627,6 +643,7 @@ export default function KisVerificationPanel() {
     setKisToken('');
     setTokenExpiry(null);
     setConnStatus('disconnected');
+    try { localStorage.removeItem('tbbuilder:kis:live-session'); } catch {}
     setHoldings([]);
     setBalanceSummary(null);
     setPriceInfo(null);
@@ -787,6 +804,13 @@ export default function KisVerificationPanel() {
         const exp = new Date(); exp.setSeconds(exp.getSeconds() + (data.expires_in ?? 86400));
         tokenExpiryRef.current = exp; setTokenExpiry(exp);
         addAutoLog('KIS 토큰 갱신 완료', 'success');
+        // 시뮬레이터 세션 토큰 갱신
+        try {
+          const existing = JSON.parse(localStorage.getItem('tbbuilder:kis:live-session') ?? '{}');
+          localStorage.setItem('tbbuilder:kis:live-session', JSON.stringify({
+            ...existing, token: data.access_token, savedAt: Date.now(),
+          }));
+        } catch {}
         return true;
       }
       addAutoLog(`KIS 토큰 갱신 실패: ${data.msg1 ?? '오류'}`, 'error');
@@ -828,6 +852,18 @@ export default function KisVerificationPanel() {
   // ═══════════════════════════════════════════════════════════════════════════
   // 자동매매 (MACD 골든/데드크로스 + RSI 과매도 필터)
   // ═══════════════════════════════════════════════════════════════════════════
+
+  // 매매 체결을 localStorage에 저장 → 대시보드 차트에 마커로 표시
+  const saveTrade = (symbol: string, type: 'BUY' | 'SELL', price: number, broker: 'kis' | 'toss' | 'kiwoom', qty = 1) => {
+    try {
+      const raw = localStorage.getItem('tbbuilder:trades');
+      const history: { timestamp: number; type: 'BUY' | 'SELL'; price: number; qty: number; symbol: string; broker: string }[] =
+        raw ? JSON.parse(raw) : [];
+      history.push({ timestamp: Date.now(), type, price, qty, symbol, broker });
+      localStorage.setItem('tbbuilder:trades', JSON.stringify(history.slice(-200)));
+    } catch {}
+  };
+
   const addAutoLog = useCallback((msg: string, type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning' = 'info') => {
     const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setAutoLogs(prev => {
@@ -907,29 +943,53 @@ export default function KisVerificationPanel() {
       const prevMacd = prevBar.macd ?? 0, prevSig = prevBar.macdSignal ?? 0;
       const currHist = currBar.macdHist ?? 0, prevHist = prevBar.macdHist ?? 0;
 
+      // ── Ross Cameron MACD+RSI 전략 ─────────────────────────────────
       const isGoldenCross  = prevMacd <= prevSig && currMacd > currSig;
       const isDeadCross    = prevMacd >= prevSig && currMacd < currSig;
-      const histIncreasing = currHist > prevHist;
-      const rsiCondition   = (currRsi > AUTO_TRADE_CONFIG.rsiOversold && currRsi <= 50 && currRsi > prevRsi)
-                           || (prevRsi < 50 && currRsi >= 50);
-      const aboveMA        = currBar.ma20 != null && currentPrice > currBar.ma20;
-      const volumeAboveAvg = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
+      const histRising     = currHist > prevHist;
+      const histTurningUp  = histRising && prevHist <= 0 && currHist > 0; // 히스토그램 선전환 (프리-시그널)
+
+      const rsiPrime      = currRsi >= 50 && currRsi <= 70;    // 최우선 진입 구간
+      const rsiPullback   = currRsi >= 30 && currRsi < 50;     // 눌림목 진입 구간
+      const rsiOverbought = currRsi > 70;                       // 과열 → 진입 금지
+
+      const aboveHMA100   = currBar.hma100   != null && currentPrice > currBar.hma100;  // 추세 필터
+      const aboveMA20     = currBar.ma20     != null && currentPrice > currBar.ma20;    // 정배열
+      const volumeConfirm = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
+
+      const hasBearishDiv = detectBearishDivergence(computed);
 
       let buyScore = 0;
-      if (isGoldenCross)   buyScore += 2;
-      if (histIncreasing)  buyScore += 1;
-      if (rsiCondition)    buyScore += 2;
-      if (aboveMA)         buyScore += 1;
-      if (volumeAboveAvg)  buyScore += 1;
+      if (isGoldenCross)                         buyScore += 3; // 핵심 시그널
+      else if (histTurningUp)                    buyScore += 1; // 프리-시그널
+      if (histRising)                            buyScore += 1; // 모멘텀 방향
+      if (rsiPrime)                              buyScore += 2; // 최우선 구간
+      else if (rsiPullback && aboveMA20)         buyScore += 1; // 눌림목 진입
+      if (volumeConfirm)                         buyScore += 1; // 거래량 확인
+      if (aboveHMA100)                           buyScore += 1; // HMA100 위
 
-      const wasOverbought = computed.slice(-AUTO_TRADE_CONFIG.rsiLookback).some(b => (b.rsi ?? 50) >= AUTO_TRADE_CONFIG.rsiOverbought);
-      const isDangerous   = wasOverbought && isDeadCross;
+      const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
 
       let signal: SignalClass;
-      if (isDangerous)        signal = '위험';
-      else if (buyScore >= 5) signal = '매수후보';
-      else if (buyScore >= 3) signal = '관심';
-      else                    signal = '관망';
+      if (isDangerous)                                      signal = '위험';
+      else if (buyScore >= 6 && isGoldenCross && rsiPrime) signal = '매수후보'; // 골든크로스 + RSI 모멘텀 구간
+      else if (buyScore >= 4)                               signal = '관심';
+      else                                                  signal = '관망';
+
+      // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절
+      const position = autoPositionRef.current;
+      if (position && signal !== '위험') {
+        const swingLow   = calcSwingLow(computed, 10);
+        const stopDist   = position.avgPrice - swingLow;
+        const tpPrice    = position.avgPrice + stopDist * 2; // RR 1:2
+        if (currentPrice <= swingLow) {
+          signal = '위험';
+          addAutoLog(`⛔ 손절: 현재가 ${currentPrice.toLocaleString()} ≤ 스윙저점 ${swingLow.toLocaleString()}`, 'sell');
+        } else if (stopDist > 0 && currentPrice >= tpPrice) {
+          signal = '위험';
+          addAutoLog(`💰 익절: 현재가 ${currentPrice.toLocaleString()} ≥ 목표가 ${Math.round(tpPrice).toLocaleString()} (RR 1:2)`, 'sell');
+        }
+      }
 
       setAutoSignal(signal);
       setAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
@@ -937,20 +997,19 @@ export default function KisVerificationPanel() {
       const flags = [
         isGoldenCross   ? '골든크로스' : null,
         isDeadCross     ? '데드크로스' : null,
-        histIncreasing  ? '히스토그램↑' : null,
-        rsiCondition    ? 'RSI반등' : null,
-        aboveMA         ? 'MA위' : null,
-        volumeAboveAvg  ? '거래량↑' : null,
+        histTurningUp   ? '히스트선전환' : histRising ? '히스트↑' : null,
+        rsiPrime        ? 'RSI모멘텀' : rsiPullback ? 'RSI눌림' : null,
+        volumeConfirm   ? '거래량↑' : null,
+        aboveHMA100     ? 'HMA위' : null,
+        hasBearishDiv   ? '⚠다이버전스' : null,
       ].filter(Boolean).join(' ');
 
       addAutoLog(
-        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/7${flags ? ' · ' + flags : ''})`,
+        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8${flags ? ' · ' + flags : ''})`,
         signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
       );
 
       // 4. 자동 주문 실행
-      const position = autoPositionRef.current;
-
       if (signal === '매수후보' && !position && !autoPlacingRef.current) {
         const qty = parseInt(autoOrderQtyRef.current) || 1;
         addAutoLog(`▶ 매수 신호 → ${qty}주 시장가 주문`, 'buy');
@@ -970,6 +1029,7 @@ export default function KisVerificationPanel() {
             const newPos = { qty, avgPrice: currentPrice };
             autoPositionRef.current = newPos; setAutoPosition(newPos);
             addAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${odno})`, 'success');
+            saveTrade(autoSymbolRef.current, 'BUY', currentPrice, 'kis', qty);
             try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: newPos })); } catch {}
           } else { addAutoLog(`❌ 매수 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error'); }
         } finally { autoPlacingRef.current = false; setAutoPlacing(false); }
@@ -991,6 +1051,7 @@ export default function KisVerificationPanel() {
           const sign = currentPrice >= position.avgPrice ? '+' : '';
           if (d.rt_cd === '0') {
             addAutoLog(`✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${sign}${profitPct}%) (${d.output?.ODNO ?? '-'})`, 'success');
+            saveTrade(autoSymbolRef.current, 'SELL', currentPrice, 'kis', position.qty);
             autoPositionRef.current = null; setAutoPosition(null);
             try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: null })); } catch {}
           } else { addAutoLog(`❌ 매도 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error'); }
@@ -1041,6 +1102,107 @@ export default function KisVerificationPanel() {
   useEffect(() => {
     if (connStatus !== 'connected' && autoEnabled) stopAutoTrade();
   }, [connStatus, autoEnabled, stopAutoTrade]);
+
+  // ── 장 시간 자동 스케줄러 helpers ─────────────────────────────────────────
+  function isKoreanMarketOpen(): boolean {
+    const kst  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+    const day  = kst.getDay(); // 0=일, 6=토
+    if (day === 0 || day === 6) return false;
+    const mins = kst.getHours() * 60 + kst.getMinutes();
+    return mins >= 9 * 60 && mins < 15 * 60 + 30;
+  }
+
+  function nextMarketEventKST(): string {
+    const kst  = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+    const day  = kst.getDay();
+    const mins = kst.getHours() * 60 + kst.getMinutes();
+    const isWeekend = day === 0 || day === 6;
+    if (!isWeekend && mins < 9 * 60) return '오늘 09:00 KST 개장';
+    if (!isWeekend && mins >= 9 * 60 && mins < 15 * 60 + 30) return '오늘 15:30 KST 폐장';
+    // 다음 영업일 찾기
+    const daysToAdd = day === 5 ? 3 : day === 6 ? 2 : 1;
+    return `D+${daysToAdd} 09:00 KST 개장`;
+  }
+
+  // KIS 모의투자 자동 연결 + 자동매매 시작
+  const tryAutoConnectAndStart = useCallback(async () => {
+    if (autoEnabledRef.current) return; // 이미 실행 중
+    try {
+      const vRaw = localStorage.getItem('tbbuilder:kis:virtual');
+      if (!vRaw) { addAutoLog('[스케줄러] 모의투자 자격증명 없음 — 먼저 저장하세요', 'error'); return; }
+      const creds: { appKey: string; appSecret: string; accountNo: string } = JSON.parse(vRaw);
+      if (!creds.appKey || !creds.appSecret || !creds.accountNo) {
+        addAutoLog('[스케줄러] 모의투자 자격증명 불완전 — KIS 탭에서 확인하세요', 'error'); return;
+      }
+
+      addAutoLog('[스케줄러] 개장 — KIS 모의투자 자동 연결 중…', 'info');
+
+      // refs + state 설정 (모의투자 고정)
+      setKisServerType('virtual');
+      kisServerTypeRef.current = 'virtual';
+      kisAppKeyRef.current     = creds.appKey;
+      kisAppSecretRef.current  = creds.appSecret;
+      canoRef.current          = creds.accountNo.slice(0, 8);
+      acntPrdtCdRef.current    = creds.accountNo.length > 8 ? creds.accountNo.slice(8) : '01';
+      setKisVirtualAppKey(creds.appKey);
+      setKisVirtualAppSecret(creds.appSecret);
+      setKisVirtualAccountNo(creds.accountNo);
+
+      const tokRes  = await fetch('/api/kis/token', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appKey: creds.appKey, appSecret: creds.appSecret }),
+      });
+      const tokData = await tokRes.json();
+      if (!tokData.access_token) {
+        addAutoLog(`[스케줄러] 토큰 발급 실패: ${tokData.msg1 ?? '-'}`, 'error'); return;
+      }
+      kisTokenRef.current = tokData.access_token;
+      setKisToken(tokData.access_token);
+      const exp = new Date();
+      exp.setSeconds(exp.getSeconds() + (tokData.expires_in ?? 86400));
+      tokenExpiryRef.current = exp; setTokenExpiry(exp);
+      setConnStatus('connected');
+      addAutoLog('[스케줄러] KIS 모의투자 연결 성공 → 자동매매 시작', 'success');
+
+      await startAutoTrade();
+      setSchedulerStatus('active');
+    } catch (e) {
+      addAutoLog(`[스케줄러] 자동 연결 실패: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }, [addAutoLog, startAutoTrade]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 스케줄러 활성/비활성 토글
+  const toggleScheduler = useCallback(() => {
+    const next = !autoScheduleEnabledRef.current;
+    autoScheduleEnabledRef.current = next;
+    setAutoScheduleEnabled(next);
+
+    if (next) {
+      setSchedulerStatus(isKoreanMarketOpen() ? 'active' : 'waiting');
+      addAutoLog(`[스케줄러] 활성화 — 장 시간(09:00-15:30 KST) 자동 연결/해제 시작`, 'info');
+      // 즉시 1회 체크
+      if (isKoreanMarketOpen() && !autoEnabledRef.current) {
+        tryAutoConnectAndStart();
+      }
+      schedulerIntervalRef.current = setInterval(() => {
+        if (!autoScheduleEnabledRef.current) return;
+        if (isKoreanMarketOpen()) {
+          setSchedulerStatus('active');
+          if (!autoEnabledRef.current) tryAutoConnectAndStart();
+        } else {
+          setSchedulerStatus('closed');
+          if (autoEnabledRef.current) {
+            stopAutoTrade();
+            addAutoLog('[스케줄러] 장 마감 — 자동매매 중지', 'warning');
+          }
+        }
+      }, 60_000);
+    } else {
+      if (schedulerIntervalRef.current) { clearInterval(schedulerIntervalRef.current); schedulerIntervalRef.current = null; }
+      setSchedulerStatus('idle');
+      addAutoLog('[스케줄러] 비활성화됨', 'warning');
+    }
+  }, [addAutoLog, stopAutoTrade, tryAutoConnectAndStart]);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Toss 자동매매 functions
@@ -1140,44 +1302,70 @@ export default function KisVerificationPanel() {
       const computed = computeIndicators(bars, AUTO_TRADE_CONFIG);
       const n = computed.length;
       if (n < 40) { addTossAutoLog('캔들 부족 (40개 미만)', 'warning'); return; }
-      const curr = computed[n - 1]; const prev = computed[n - 2]; const prev2 = computed[n - 3];
+      const curr = computed[n - 1]; const prev = computed[n - 2];
 
       const currRsi = curr.rsi ?? 50; const currMacd = curr.macd ?? 0;
       const currSig = curr.macdSignal ?? 0; const currHist = curr.macdHist ?? 0;
       const prevHist = prev.macdHist ?? 0; const prevMacd = prev.macd ?? 0;
       const prevSig = prev.macdSignal ?? 0;
 
-      const isGoldenCross = currMacd > currSig && prevMacd <= prevSig;
-      const isDeadCross   = currMacd < currSig && prevMacd >= prevSig;
-      const histIncreasing = currHist > prevHist && prevHist > (prev2.macdHist ?? 0);
-      const rsiRecentLow  = computed.slice(Math.max(0, n - AUTO_TRADE_CONFIG.rsiLookback - 1), n - 1).some(b => (b.rsi ?? 50) <= AUTO_TRADE_CONFIG.rsiOversold);
-      const rsiCondition  = rsiRecentLow && currRsi > AUTO_TRADE_CONFIG.rsiOversold;
-      const aboveMA = curr.ma20 != null ? currentPrice > curr.ma20 : false;
-      const volumeAboveAvg = curr.volumeMA != null ? (curr.volume ?? 0) > curr.volumeMA : false;
+      // ── Ross Cameron MACD+RSI 전략 ─────────────────────────────────
+      const isGoldenCross  = prevMacd <= prevSig && currMacd > currSig;
+      const isDeadCross    = prevMacd >= prevSig && currMacd < currSig;
+      const histRising     = currHist > prevHist;
+      const histTurningUp  = histRising && prevHist <= 0 && currHist > 0;
+
+      const rsiPrime      = currRsi >= 50 && currRsi <= 70;
+      const rsiPullback   = currRsi >= 30 && currRsi < 50;
+      const rsiOverbought = currRsi > 70;
+
+      const aboveHMA100   = curr.hma100   != null && currentPrice > curr.hma100;
+      const aboveMA20     = curr.ma20     != null && currentPrice > curr.ma20;
+      const volumeConfirm = curr.volumeMA != null && (curr.volume ?? 0) > curr.volumeMA;
+
+      const hasBearishDiv = detectBearishDivergence(computed);
 
       let buyScore = 0;
-      if (isGoldenCross)   buyScore += 2;
-      if (histIncreasing)  buyScore += 1;
-      if (rsiCondition)    buyScore += 2;
-      if (aboveMA)         buyScore += 1;
-      if (volumeAboveAvg)  buyScore += 1;
+      if (isGoldenCross)                         buyScore += 3;
+      else if (histTurningUp)                    buyScore += 1;
+      if (histRising)                            buyScore += 1;
+      if (rsiPrime)                              buyScore += 2;
+      else if (rsiPullback && aboveMA20)         buyScore += 1;
+      if (volumeConfirm)                         buyScore += 1;
+      if (aboveHMA100)                           buyScore += 1;
+
+      const isDangerousToss = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
 
       let signal: SignalClass = '관망';
-      if (isDeadCross && currRsi > AUTO_TRADE_CONFIG.rsiOverbought) signal = '위험';
-      else if (buyScore >= 5) signal = '매수후보';
-      else if (buyScore >= 3) signal = '관심';
+      if (isDangerousToss)                                  signal = '위험';
+      else if (buyScore >= 6 && isGoldenCross && rsiPrime)  signal = '매수후보';
+      else if (buyScore >= 4)                               signal = '관심';
+
+      // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절
+      const tossPosition = tossAutoPositionRef.current;
+      if (tossPosition && signal !== '위험') {
+        const swingLow = calcSwingLow(computed, 10);
+        const stopDist = tossPosition.avgPrice - swingLow;
+        const tpPrice  = tossPosition.avgPrice + stopDist * 2;
+        if (currentPrice <= swingLow) {
+          signal = '위험';
+          addTossAutoLog(`⛔ 손절: 현재가 ${currentPrice.toLocaleString()} ≤ 스윙저점 ${swingLow.toLocaleString()}`, 'sell');
+        } else if (stopDist > 0 && currentPrice >= tpPrice) {
+          signal = '위험';
+          addTossAutoLog(`💰 익절: 현재가 ${currentPrice.toLocaleString()} ≥ 목표가 ${Math.round(tpPrice).toLocaleString()} (RR 1:2)`, 'sell');
+        }
+      }
 
       setTossAutoSignal(signal);
       setTossAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
 
       addTossAutoLog(
-        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/7)`,
+        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8)`,
         signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
       );
 
       // 4. 자동 주문
-      const position = tossAutoPositionRef.current;
-      if (signal === '매수후보' && !position && seq != null && !tossAutoPlacingRef.current) {
+      if (signal === '매수후보' && !tossPosition && seq != null && !tossAutoPlacingRef.current) {
         const qty = parseInt(tossAutoOrderQtyRef.current) || 1;
         addTossAutoLog(`▶ 매수 신호 → ${qty}주 시장가 주문`, 'buy');
         tossAutoPlacingRef.current = true; setTossAutoPlacing(true);
@@ -1193,24 +1381,26 @@ export default function KisVerificationPanel() {
             const newPos = { qty, avgPrice: currentPrice };
             tossAutoPositionRef.current = newPos; setTossAutoPosition(newPos);
             addTossAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${ok})`, 'success');
+            saveTrade(tossAutoSymbolRef.current, 'BUY', currentPrice, 'toss', qty);
             try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:toss') ?? '{}'); localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...s, position: newPos })); } catch {}
           } else { addTossAutoLog(`❌ 매수 실패: ${d.message ?? d.error ?? '오류'}`, 'error'); }
         } finally { tossAutoPlacingRef.current = false; setTossAutoPlacing(false); }
 
-      } else if (signal === '위험' && position && seq != null && !tossAutoPlacingRef.current) {
-        addTossAutoLog(`▶ 매도 신호 → ${position.qty}주 시장가 주문`, 'sell');
+      } else if (signal === '위험' && tossPosition && seq != null && !tossAutoPlacingRef.current) {
+        addTossAutoLog(`▶ 매도 신호 → ${tossPosition.qty}주 시장가 주문`, 'sell');
         tossAutoPlacingRef.current = true; setTossAutoPlacing(true);
         try {
           const r = await fetch('/api/toss/order', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-toss-token': tok, 'x-toss-account-seq': String(seq) },
-            body: JSON.stringify({ symbol: tossAutoSymbolRef.current, side: 'SELL', orderType: 'MARKET', quantity: String(position.qty), currency: 'KRW' }),
+            body: JSON.stringify({ symbol: tossAutoSymbolRef.current, side: 'SELL', orderType: 'MARKET', quantity: String(tossPosition.qty), currency: 'KRW' }),
           });
           const d = await r.json();
           const ok = d.result?.orderId ?? d.orderId;
-          const pct = ((currentPrice - position.avgPrice) / position.avgPrice * 100).toFixed(2);
+          const pct = ((currentPrice - tossPosition.avgPrice) / tossPosition.avgPrice * 100).toFixed(2);
           if (ok) {
-            addTossAutoLog(`✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${currentPrice >= position.avgPrice ? '+' : ''}${pct}%)`, 'success');
+            addTossAutoLog(`✅ 매도 완료: ${tossPosition.qty}주 @ ${currentPrice.toLocaleString()}원 (${currentPrice >= tossPosition.avgPrice ? '+' : ''}${pct}%)`, 'success');
+            saveTrade(tossAutoSymbolRef.current, 'SELL', currentPrice, 'toss', tossPosition.qty);
             tossAutoPositionRef.current = null; setTossAutoPosition(null);
             try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:toss') ?? '{}'); localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...s, position: null })); } catch {}
           } else { addTossAutoLog(`❌ 매도 실패: ${d.message ?? d.error ?? '오류'}`, 'error'); }
@@ -1317,37 +1507,49 @@ export default function KisVerificationPanel() {
             const computed = computeIndicators(bars, AUTO_TRADE_CONFIG);
             const n = computed.length;
             if (n < 40) return;
-            const curr = computed[n - 1]; const prev = computed[n - 2]; const prev2 = computed[n - 3];
+            const curr = computed[n - 1]; const prev = computed[n - 2];
 
             const currRsi = curr.rsi ?? 50; const currMacd = curr.macd ?? 0;
             const currSig = curr.macdSignal ?? 0; const currHist = curr.macdHist ?? 0;
             const prevHist = prev.macdHist ?? 0; const prevMacd = prev.macd ?? 0; const prevSig = prev.macdSignal ?? 0;
 
-            const isGoldenCross = currMacd > currSig && prevMacd <= prevSig;
-            const isDeadCross   = currMacd < currSig && prevMacd >= prevSig;
-            const histIncreasing = currHist > prevHist && prevHist > (prev2.macdHist ?? 0);
-            const rsiRecentLow  = computed.slice(Math.max(0, n - AUTO_TRADE_CONFIG.rsiLookback - 1), n - 1).some(b => (b.rsi ?? 50) <= AUTO_TRADE_CONFIG.rsiOversold);
-            const rsiCondition  = rsiRecentLow && currRsi > AUTO_TRADE_CONFIG.rsiOversold;
-            const aboveMA = curr.ma20 != null ? currentPrice > curr.ma20 : false;
-            const volumeAboveAvg = curr.volumeMA != null ? (curr.volume ?? 0) > curr.volumeMA : false;
+            // ── Ross Cameron MACD+RSI 전략 ──────────────────────────
+            const isGoldenCross  = prevMacd <= prevSig && currMacd > currSig;
+            const isDeadCross    = prevMacd >= prevSig && currMacd < currSig;
+            const histRising     = currHist > prevHist;
+            const histTurningUp  = histRising && prevHist <= 0 && currHist > 0;
+
+            const rsiPrime      = currRsi >= 50 && currRsi <= 70;
+            const rsiPullback   = currRsi >= 30 && currRsi < 50;
+            const rsiOverbought = currRsi > 70;
+
+            const aboveHMA100   = curr.hma100   != null && currentPrice > curr.hma100;
+            const aboveMA20     = curr.ma20     != null && currentPrice > curr.ma20;
+            const volumeConfirm = curr.volumeMA != null && (curr.volume ?? 0) > curr.volumeMA;
+
+            const hasBearishDiv = detectBearishDivergence(computed);
 
             let buyScore = 0;
-            if (isGoldenCross)  buyScore += 2;
-            if (histIncreasing) buyScore += 1;
-            if (rsiCondition)   buyScore += 2;
-            if (aboveMA)        buyScore += 1;
-            if (volumeAboveAvg) buyScore += 1;
+            if (isGoldenCross)                         buyScore += 3;
+            else if (histTurningUp)                    buyScore += 1;
+            if (histRising)                            buyScore += 1;
+            if (rsiPrime)                              buyScore += 2;
+            else if (rsiPullback && aboveMA20)         buyScore += 1;
+            if (volumeConfirm)                         buyScore += 1;
+            if (aboveHMA100)                           buyScore += 1;
+
+            const isDangerousKiwoom = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
 
             let signal: SignalClass = '관망';
-            if (isDeadCross && currRsi > AUTO_TRADE_CONFIG.rsiOverbought) signal = '위험';
-            else if (buyScore >= 5) signal = '매수후보';
-            else if (buyScore >= 3) signal = '관심';
+            if (isDangerousKiwoom)                                signal = '위험';
+            else if (buyScore >= 6 && isGoldenCross && rsiPrime)  signal = '매수후보';
+            else if (buyScore >= 4)                               signal = '관심';
 
             setKiwoomAutoSignal(signal);
             setKiwoomAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
 
             addKiwoomAutoLog(
-              `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/7)${signal === '매수후보' ? ' → Python 스크립트로 매수 실행' : signal === '위험' ? ' → Python 스크립트로 매도 실행' : ''}`,
+              `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8)${signal === '매수후보' ? ' → Python 스크립트로 매수 실행' : signal === '위험' ? ' → Python 스크립트로 매도 실행' : ''}`,
               signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
             );
           }
@@ -1902,7 +2104,7 @@ if __name__ == "__main__":
   const isUp = priceChange >= 0;
 
   const renderKisSubTabNav = () => (
-    <div className="flex border-b border-slate-800 text-xs mb-5">
+    <div className="flex border-b border-border text-xs mb-5">
       {([
         ['account', 'Wallet',   '잔고/보유주식'],
         ['trade',   'Zap',      '실거래 주문'],
@@ -1913,10 +2115,10 @@ if __name__ == "__main__":
         <button
           key={id}
           onClick={() => setKisSubTab(id)}
-          className={`pb-2.5 px-4 font-bold transition border-b-2 cursor-pointer whitespace-nowrap ${
+          className={`pb-2.5 px-4 font-semibold transition border-b-2 cursor-pointer whitespace-nowrap ${
             kisSubTab === id
-              ? 'border-emerald-500 text-emerald-400'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
           {label}
@@ -1933,21 +2135,21 @@ if __name__ == "__main__":
         <div className="grid grid-cols-2 gap-2">
           {(['virtual', 'real'] as const).map(s => (
             <button key={s} onClick={() => { setKisServerType(s); handleDisconnect(); }}
-              className={`py-1.5 px-3 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+              className={`py-2 px-3 rounded-lg text-xs font-bold border transition cursor-pointer ${
                 kisServerType === s
                   ? s === 'real'
-                    ? 'bg-rose-600/10 border-rose-500 text-rose-400 font-bold'
-                    : 'bg-emerald-600/10 border-emerald-500 text-emerald-400 font-bold'
-                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    ? 'bg-rose-600 border-rose-600 text-white shadow-sm'
+                    : 'bg-emerald-600 border-emerald-600 text-white shadow-sm'
+                  : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-slate-100'
               }`}>
               {s === 'virtual' ? '모의투자 (테스트)' : '실전투자 (실거래)'}
             </button>
           ))}
         </div>
         {kisServerType === 'real' && (
-          <div className="mt-2 flex items-start gap-2 p-2 bg-rose-950/30 border border-rose-800/50 rounded-lg">
-            <AlertTriangle className="h-3.5 w-3.5 text-rose-400 flex-shrink-0 mt-0.5" />
-            <p className="text-[10px] text-rose-300 leading-relaxed">
+          <div className="mt-2 flex items-start gap-2 p-2.5 bg-rose-950/60 border border-rose-700 rounded-lg">
+            <AlertTriangle className="h-3.5 w-3.5 text-rose-300 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-rose-100 leading-relaxed">
               <strong>실전 서버</strong>에 연결합니다. 주문 시 실제 자금이 사용됩니다. 신중하게 진행하세요.
             </p>
           </div>
@@ -1964,18 +2166,18 @@ if __name__ == "__main__":
       </div>
       <div>
         <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
-          App Key <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-900/50 text-rose-300' : 'bg-emerald-900/50 text-emerald-300'}`}>
+          App Key <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-700 text-white' : 'bg-emerald-700 text-white'}`}>
             {kisServerType === 'real' ? '실전' : '모의'}
           </span>
         </label>
         <input type="text" value={kisAppKey} onChange={e => setKisAppKey(e.target.value)}
           placeholder={kisServerType === 'real' ? '실전투자 App Key' : '모의투자 App Key'}
-          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+          className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
       </div>
       <div>
         <div className="flex justify-between items-center mb-1.5">
           <label className="block text-[11px] font-bold text-slate-400">
-            App Secret <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-900/50 text-rose-300' : 'bg-emerald-900/50 text-emerald-300'}`}>
+            App Secret <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-700 text-white' : 'bg-emerald-700 text-white'}`}>
               {kisServerType === 'real' ? '실전' : '모의'}
             </span>
           </label>
@@ -1986,18 +2188,18 @@ if __name__ == "__main__":
         <input type={showSecret ? 'text' : 'password'} value={kisAppSecret}
           onChange={e => setKisAppSecret(e.target.value)}
           placeholder={kisServerType === 'real' ? '실전투자 App Secret' : '모의투자 App Secret'}
-          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+          className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
       </div>
       <div>
         <label className="block text-[11px] font-bold text-slate-400 mb-1.5">
-          종합계좌번호 (10자리) <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-900/50 text-rose-300' : 'bg-emerald-900/50 text-emerald-300'}`}>
+          종합계좌번호 (10자리) <span className={`ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded ${kisServerType === 'real' ? 'bg-rose-700 text-white' : 'bg-emerald-700 text-white'}`}>
             {kisServerType === 'real' ? '실전계좌' : '모의계좌'}
           </span>
         </label>
         <input type="text" maxLength={10} value={kisAccountNo}
           onChange={e => setKisAccountNo(e.target.value.replace(/\D/g, ''))}
           placeholder={kisServerType === 'real' ? '실전 계좌번호 10자리' : '모의 계좌번호 10자리'}
-          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+          className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
         {kisAccountNo.length === 10 && (
           <p className="text-[10px] text-slate-500 mt-1">
             계좌: <span className="font-mono text-slate-300">{cano}</span>
@@ -2009,14 +2211,14 @@ if __name__ == "__main__":
       {/* Save / Clear credentials */}
       <div className="flex items-center gap-2">
         <button onClick={saveKisCreds} disabled={!kisAppKey && !kisAppSecret}
-          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
+          className="flex-1 py-2 px-3 rounded-xl text-xs font-bold bg-slate-700 hover:bg-slate-600 text-white transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
           {kisSaved
-            ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span className="text-emerald-400">{kisServerType === 'real' ? '실전' : '모의'} 저장됨</span></>
+            ? <><Check className="h-3.5 w-3.5 text-emerald-300" /><span className="text-emerald-300">{kisServerType === 'real' ? '실전' : '모의'} 저장됨</span></>
             : <><Save className="h-3.5 w-3.5" />{kisServerType === 'real' ? '실전' : '모의'} 자격증명 저장</>}
         </button>
         {kisHasStored && (
           <button onClick={clearKisCreds}
-            className="py-2 px-2.5 rounded-xl text-xs font-bold bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/40 transition cursor-pointer flex items-center gap-1">
+            className="py-2 px-3 rounded-xl text-xs font-bold bg-rose-700 hover:bg-rose-600 text-white transition cursor-pointer flex items-center gap-1.5">
             <Trash2 className="h-3.5 w-3.5" />삭제
           </button>
         )}
@@ -2048,7 +2250,7 @@ if __name__ == "__main__":
           </button>
         )}
         {connError && (
-          <p className="text-[10px] text-rose-400 mt-2 p-2 bg-rose-950/30 rounded-lg border border-rose-800/40">{connError}</p>
+          <p className="text-[10px] text-rose-100 mt-2 p-2 bg-rose-800 rounded-lg border border-rose-600">{connError}</p>
         )}
       </div>
 
@@ -2155,7 +2357,7 @@ if __name__ == "__main__":
               <input type="text" value={priceCode}
                 onChange={e => setPriceCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="종목코드"
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                className="flex-1 bg-white border border-[#171717] rounded-[6px] px-3 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
               <button onClick={() => fetchPrice()} disabled={loadingPrice}
                 className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition cursor-pointer flex items-center gap-1.5">
                 <RefreshCw className={`h-3 w-3 ${loadingPrice ? 'animate-spin' : ''}`} />
@@ -2206,7 +2408,7 @@ if __name__ == "__main__":
                 <label className="text-[10px] text-slate-400 mb-1 block">종목코드</label>
                 <input type="text" value={orderCode}
                   onChange={e => setOrderCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                  className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
               </div>
 
               {/* Buy / Sell */}
@@ -2216,8 +2418,8 @@ if __name__ == "__main__":
                     className={`py-2 rounded-lg text-xs font-bold border transition cursor-pointer ${
                       orderSide === s
                         ? s === 'buy'
-                          ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
-                          : 'bg-rose-600/20 border-rose-500 text-rose-400'
+                          ? 'bg-emerald-600 border-emerald-600 text-white'
+                          : 'bg-rose-600 border-rose-600 text-white'
                         : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
                     }`}>
                     {s === 'buy' ? '매수 (BUY)' : '매도 (SELL)'}
@@ -2244,13 +2446,13 @@ if __name__ == "__main__":
                 <div>
                   <label className="text-[10px] text-slate-400 mb-1 block">수량 (주)</label>
                   <input type="number" min="1" value={orderQty} onChange={e => setOrderQty(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                    className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
                 </div>
                 {orderType === '00' && (
                   <div>
                     <label className="text-[10px] text-slate-400 mb-1 block">지정가 (원)</label>
                     <input type="number" min="0" value={orderPrice} onChange={e => setOrderPrice(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                      className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
                   </div>
                 )}
               </div>
@@ -2279,8 +2481,8 @@ if __name__ == "__main__":
           {orderResult && (
             <div className={`flex items-start gap-2 p-3 rounded-xl border text-xs ${
               orderResult.success
-                ? 'bg-emerald-950/30 border-emerald-800/50 text-emerald-400'
-                : 'bg-rose-950/30 border-rose-800/50 text-rose-400'
+                ? 'bg-emerald-900 border-emerald-700 text-emerald-100'
+                : 'bg-rose-900 border-rose-700 text-rose-100'
             }`}>
               {orderResult.success ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />}
               <span>{orderResult.msg}</span>
@@ -2411,10 +2613,10 @@ if __name__ == "__main__":
   // ═══════════════════════════════════════════════════════════════════════════
   const renderAutoTrade = () => {
     const signalColor: Record<SignalClass, string> = {
-      '매수후보': 'text-emerald-400 border-emerald-500 bg-emerald-950/30',
-      '관심':    'text-blue-400 border-blue-500 bg-blue-950/30',
-      '관망':    'text-slate-400 border-slate-600 bg-slate-900',
-      '위험':    'text-rose-400 border-rose-500 bg-rose-950/30',
+      '매수후보': 'text-emerald-300 border-emerald-500 bg-emerald-900',
+      '관심':    'text-blue-200 border-blue-500 bg-blue-900',
+      '관망':    'text-slate-300 border-slate-600 bg-slate-800',
+      '위험':    'text-rose-200 border-rose-500 bg-rose-900',
     };
     const logColor: Record<string, string> = {
       buy: 'text-emerald-400', sell: 'text-rose-400',
@@ -2471,7 +2673,7 @@ if __name__ == "__main__":
               }}
               disabled={autoEnabled}
               placeholder="예: 000660"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
             />
           </div>
           <div>
@@ -2480,7 +2682,7 @@ if __name__ == "__main__":
               type="number" min="1" value={autoOrderQty}
               onChange={e => setAutoOrderQty(e.target.value)}
               disabled={autoEnabled}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
             />
           </div>
           <div>
@@ -2489,7 +2691,7 @@ if __name__ == "__main__":
               type="number" min="10" max="300" value={autoCheckInterval}
               onChange={e => setAutoCheckInterval(parseInt(e.target.value) || 30)}
               disabled={autoEnabled}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
             />
           </div>
         </div>
@@ -2536,6 +2738,33 @@ if __name__ == "__main__":
             <span className="text-[9px] text-slate-600">{autoSymbol}</span>
           </div>
         )}
+
+        {/* 장 시간 자동 스케줄러 */}
+        <div className={`p-3 rounded-xl border ${autoScheduleEnabled ? 'border-indigo-600 bg-indigo-950/25' : 'border-slate-700 bg-slate-900'}`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Clock className="h-3.5 w-3.5 text-indigo-400" />
+              <span className="text-[11px] font-bold text-slate-200">장 시간 자동 스케줄</span>
+              <span className="text-[9px] text-slate-500">09:00–15:30 KST</span>
+            </div>
+            <button
+              onClick={toggleScheduler}
+              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${autoScheduleEnabled ? 'bg-indigo-700 hover:bg-indigo-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
+            >
+              {autoScheduleEnabled ? '스케줄 OFF' : '스케줄 ON'}
+            </button>
+          </div>
+          {autoScheduleEnabled && (
+            <div className="flex items-center gap-2 text-[10px]">
+              {schedulerStatus === 'active'  && <><span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /><span className="text-emerald-400">장 중 — 자동매매 활성</span></>}
+              {schedulerStatus === 'waiting' && <><span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse inline-block" /><span className="text-amber-400">대기 중 — {nextMarketEventKST()}</span></>}
+              {schedulerStatus === 'closed'  && <><span className="h-2 w-2 rounded-full bg-slate-500 inline-block" /><span className="text-slate-400">장 마감 — {nextMarketEventKST()}</span></>}
+            </div>
+          )}
+          {!autoScheduleEnabled && (
+            <p className="text-[9px] text-slate-500">활성화하면 KIS 모의투자를 09:00에 자동 연결하고 자동매매를 시작합니다. 15:30 장 마감 시 자동 중지.</p>
+          )}
+        </div>
 
         {/* 시작 / 중지 버튼 */}
         {!autoEnabled ? (
@@ -2586,7 +2815,7 @@ if __name__ == "__main__":
               setAutoPlacing(false);
             }}
             disabled={autoPlacing}
-            className="w-full py-1.5 rounded-xl text-xs font-bold bg-amber-800/60 hover:bg-amber-700/80 text-amber-300 border border-amber-700/40 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+            className="w-full py-1.5 rounded-xl text-xs font-bold bg-amber-700 hover:bg-amber-600 text-white border border-amber-600 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
           >
             <TrendingDown className="h-3.5 w-3.5" />지금 즉시 매도 (수동)
           </button>
@@ -2612,7 +2841,7 @@ if __name__ == "__main__":
         </div>
 
         {connStatus !== 'connected' && (
-          <div className="p-2 bg-amber-950/30 border border-amber-800/40 rounded-lg text-[10px] text-amber-400 flex items-center gap-2">
+          <div className="p-2 bg-amber-900 border border-amber-700 rounded-lg text-[10px] text-amber-100 flex items-center gap-2">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             KIS에 먼저 연결하세요 (모의투자 권장).
           </div>
@@ -2627,10 +2856,10 @@ if __name__ == "__main__":
 
   const renderTossAutoTrade = () => {
     const signalColor: Record<SignalClass, string> = {
-      '매수후보': 'text-emerald-400 border-emerald-500 bg-emerald-950/30',
-      '관심':    'text-blue-400 border-blue-500 bg-blue-950/30',
-      '관망':    'text-slate-400 border-slate-600 bg-slate-900',
-      '위험':    'text-rose-400 border-rose-500 bg-rose-950/30',
+      '매수후보': 'text-emerald-300 border-emerald-500 bg-emerald-900',
+      '관심':    'text-blue-200 border-blue-500 bg-blue-900',
+      '관망':    'text-slate-300 border-slate-600 bg-slate-800',
+      '위험':    'text-rose-200 border-rose-500 bg-rose-900',
     };
     const logColor: Record<string, string> = {
       buy: 'text-emerald-400', sell: 'text-rose-400',
@@ -2677,19 +2906,19 @@ if __name__ == "__main__":
             <input type="text" maxLength={6} value={tossAutoSymbol}
               onChange={e => { const v = e.target.value.replace(/\D/g, ''); setTossAutoSymbol(v); }}
               disabled={tossAutoEnabled} placeholder="예: 000660"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
           </div>
           <div>
             <label className="block text-[10px] font-bold text-slate-400 mb-1">1회 주문수량 (주)</label>
             <input type="number" min="1" value={tossAutoOrderQty}
               onChange={e => setTossAutoOrderQty(e.target.value)} disabled={tossAutoEnabled}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
           </div>
           <div>
             <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
             <input type="number" min="10" max="300" value={tossAutoCheckInterval}
               onChange={e => setTossAutoCheckInterval(parseInt(e.target.value) || 30)} disabled={tossAutoEnabled}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
           </div>
         </div>
 
@@ -2767,7 +2996,7 @@ if __name__ == "__main__":
               setTossAutoPlacing(false);
             }}
             disabled={tossAutoPlacing}
-            className="w-full py-1.5 rounded-xl text-xs font-bold bg-amber-800/60 hover:bg-amber-700/80 text-amber-300 border border-amber-700/40 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
+            className="w-full py-1.5 rounded-xl text-xs font-bold bg-amber-700 hover:bg-amber-600 text-white border border-amber-600 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40">
             <TrendingDown className="h-3.5 w-3.5" />지금 즉시 매도 (수동)
           </button>
         )}
@@ -2791,7 +3020,7 @@ if __name__ == "__main__":
         </div>
 
         {tossConnStatus !== 'connected' && (
-          <div className="p-2 bg-amber-950/30 border border-amber-800/40 rounded-lg text-[10px] text-amber-400 flex items-center gap-2">
+          <div className="p-2 bg-amber-900 border border-amber-700 rounded-lg text-[10px] text-amber-100 flex items-center gap-2">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             토스증권에 먼저 연결하세요.
           </div>
@@ -2802,10 +3031,10 @@ if __name__ == "__main__":
 
   const renderKiwoomAutoTrade = () => {
     const signalColor: Record<SignalClass, string> = {
-      '매수후보': 'text-emerald-400 border-emerald-500 bg-emerald-950/30',
-      '관심':    'text-blue-400 border-blue-500 bg-blue-950/30',
-      '관망':    'text-slate-400 border-slate-600 bg-slate-900',
-      '위험':    'text-rose-400 border-rose-500 bg-rose-950/30',
+      '매수후보': 'text-emerald-300 border-emerald-500 bg-emerald-900',
+      '관심':    'text-blue-200 border-blue-500 bg-blue-900',
+      '관망':    'text-slate-300 border-slate-600 bg-slate-800',
+      '위험':    'text-rose-200 border-rose-500 bg-rose-900',
     };
     const logColor: Record<string, string> = {
       buy: 'text-emerald-400', sell: 'text-rose-400',
@@ -2841,7 +3070,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           />
         )}
 
-        <div className="p-3 bg-amber-950/30 border border-amber-700/40 rounded-xl text-[10px] text-amber-300 leading-relaxed space-y-1">
+        <div className="p-3 bg-amber-900 border border-amber-700 rounded-xl text-[10px] text-amber-100 leading-relaxed space-y-1">
           <p className="font-bold text-[11px]">⚠ 키움증권 신호 모니터 (실주문 제한)</p>
           <p>키움 OpenAPI+는 Windows 32비트 전용 COM 컴포넌트이므로 이 브라우저 앱에서 직접 주문할 수 없습니다.</p>
           <p>아래에서 <strong>MACD+RSI 매수/매도 신호</strong>를 실시간으로 확인하고, 신호 발생 시 Windows Python 스크립트를 직접 실행하세요.</p>
@@ -2853,13 +3082,13 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
             <input type="text" maxLength={6} value={kiwoomAutoSymbol}
               onChange={e => setKiwoomAutoSymbol(e.target.value.replace(/\D/g, ''))}
               disabled={kiwoomAutoEnabled} placeholder="예: 000660"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50" />
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
           </div>
           <div>
             <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
             <input type="number" min="30" max="600" value={kiwoomAutoCheckInterval}
               onChange={e => setKiwoomAutoCheckInterval(parseInt(e.target.value) || 60)} disabled={kiwoomAutoEnabled}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50" />
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
           </div>
         </div>
 
@@ -2900,7 +3129,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
         )}
 
         {kiwoomAutoSignal !== '관망' && (
-          <div className={`p-3 rounded-xl border text-[10px] leading-relaxed ${kiwoomAutoSignal === '매수후보' ? 'border-emerald-700/50 bg-emerald-950/20 text-emerald-300' : 'border-rose-700/50 bg-rose-950/20 text-rose-300'}`}>
+          <div className={`p-3 rounded-xl border text-[10px] leading-relaxed ${kiwoomAutoSignal === '매수후보' ? 'border-emerald-600 bg-emerald-900 text-emerald-100' : 'border-rose-600 bg-rose-900 text-rose-100'}`}>
             <p className="font-bold mb-1">{kiwoomAutoSignal === '매수후보' ? '🟢 매수 신호 발생!' : kiwoomAutoSignal === '관심' ? '🔵 관심 종목' : '🔴 매도 신호 발생!'}</p>
             <p>Windows에서 Python 스크립트를 실행하여 키움 OpenAPI+로 주문하세요. (아래 파이썬 코드 탭 참고)</p>
           </div>
@@ -2940,13 +3169,13 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
   };
 
   const renderTossSubTabNav = () => (
-    <div className="flex border-b border-slate-800 text-xs mb-5">
+    <div className="flex border-b border-border text-xs mb-5">
       {(['account', 'trade', 'history', 'script', 'auto'] as TossSubTab[]).map((id) => {
         const label = { account: '잔고/보유주식', trade: '실거래 주문', history: '체결/미체결', script: '파이썬 코드', auto: '🤖 자동매매' }[id];
         return (
           <button key={id} onClick={() => setTossSubTab(id)}
-            className={`pb-2.5 px-4 font-bold transition border-b-2 cursor-pointer whitespace-nowrap ${
-              tossSubTab === id ? 'border-blue-500 text-blue-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+            className={`pb-2.5 px-4 font-semibold transition border-b-2 cursor-pointer whitespace-nowrap ${
+              tossSubTab === id ? 'border-blue-500 text-blue-600' : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}>{label}</button>
         );
       })}
@@ -2960,7 +3189,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
         <input type="text" value={tossClientId} onChange={e => setTossClientId(e.target.value)}
           placeholder="ts_cli_xxxxxxxxxxxxxxxxxxxxxxxx"
           disabled={tossConnStatus === 'connected'}
-          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+          className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
       </div>
       <div>
         <div className="flex justify-between items-center mb-1.5">
@@ -2973,7 +3202,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           onChange={e => setTossClientSecret(e.target.value)}
           placeholder="ts_sec_xxxxxxxxxxxxxxxxxxxxxxxx"
           disabled={tossConnStatus === 'connected'}
-          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50" />
+          className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
       </div>
 
       {/* Save / Clear credentials */}
@@ -2986,7 +3215,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
         </button>
         {tossHasStored && (
           <button onClick={clearTossCreds}
-            className="py-2 px-2.5 rounded-xl text-xs font-bold bg-rose-950/30 hover:bg-rose-900/50 text-rose-400 border border-rose-800/40 transition cursor-pointer flex items-center gap-1">
+            className="py-2 px-3 rounded-xl text-xs font-bold bg-rose-700 hover:bg-rose-600 text-white transition cursor-pointer flex items-center gap-1.5">
             <Trash2 className="h-3.5 w-3.5" />삭제
           </button>
         )}
@@ -3024,7 +3253,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           </button>
         )}
         {tossConnError && (
-          <p className="text-[10px] text-rose-400 mt-2 p-2 bg-rose-950/30 rounded-lg border border-rose-800/40">{tossConnError}</p>
+          <p className="text-[10px] text-rose-100 mt-2 p-2 bg-rose-800 rounded-lg border border-rose-600">{tossConnError}</p>
         )}
       </div>
 
@@ -3183,7 +3412,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
                   <button key={s} onClick={() => setTossOrderSide(s)}
                     className={`py-2 rounded-lg text-xs font-bold border transition cursor-pointer ${
                       tossOrderSide === s
-                        ? s === 'BUY' ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400' : 'bg-rose-600/20 border-rose-500 text-rose-400'
+                        ? s === 'BUY' ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-rose-600 border-rose-600 text-white'
                         : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
                     }`}>
                     {s === 'BUY' ? '매수 (BUY)' : '매도 (SELL)'}
@@ -3227,7 +3456,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
 
           {tossOrderResult && (
             <div className={`flex items-start gap-2 p-3 rounded-xl border text-xs ${
-              tossOrderResult.success ? 'bg-emerald-950/30 border-emerald-800/50 text-emerald-400' : 'bg-rose-950/30 border-rose-800/50 text-rose-400'
+              tossOrderResult.success ? 'bg-emerald-900 border-emerald-700 text-emerald-100' : 'bg-rose-900 border-rose-700 text-rose-100'
             }`}>
               {tossOrderResult.success ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />}
               <span>{tossOrderResult.msg}</span>
@@ -3504,12 +3733,12 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
 
       {/* 전역 자동매매 실행 중 배너 */}
       {anyAutoActive && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-emerald-950/50 border border-emerald-700/60 rounded-2xl text-xs font-bold text-emerald-300 shadow-lg">
+        <div className="flex items-center gap-3 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs font-bold text-emerald-700 shadow-sm">
           <span className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
             자동매매 실행 중
           </span>
-          <span className="text-slate-500">|</span>
+          <span className="text-emerald-300">|</span>
           {autoEnabled && (
             <span className="flex items-center gap-1">
               <Bot className="h-3.5 w-3.5" />
@@ -3535,28 +3764,28 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
       )}
 
       {/* Header */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <div className="bg-card border border-border rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
         <div className="space-y-1">
-          <div className="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
+          <div className="flex items-center space-x-2 text-emerald-600 font-bold text-sm">
             <ShieldCheck className="h-5 w-5" />
             <span>국내 주요 증권사 실거래 API 연동 센터</span>
           </div>
-          <p className="text-xs text-slate-400">
-            <strong>한국투자증권(KIS)</strong> — 실제 REST API 연동 (토큰 발급 · 잔고 조회 · 실시간 주문 · 체결 내역)
+          <p className="text-xs text-muted-foreground">
+            <strong className="text-foreground">한국투자증권(KIS)</strong> — 실제 REST API 연동 (토큰 발급 · 잔고 조회 · 실시간 주문 · 체결 내역)
             <br />
-            <strong>토스증권</strong> — 실제 REST API 연동 (OAuth2 · 잔고 조회 · 실시간 주문 · 체결 내역)
+            <strong className="text-foreground">토스증권</strong> — 실제 REST API 연동 (OAuth2 · 잔고 조회 · 실시간 주문 · 체결 내역)
             <br />
-            <strong>키움증권</strong> — 연동 규격 가상 검증 + 파이썬 스크립트 생성 (Windows 32bit 전용)
+            <strong className="text-foreground">키움증권</strong> — 연동 규격 가상 검증 + 파이썬 스크립트 생성 (Windows 32bit 전용)
           </p>
         </div>
-        <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-xl text-xs font-mono font-medium whitespace-nowrap self-start md:self-auto flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <div className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs font-mono font-medium whitespace-nowrap self-start md:self-auto flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
           KIS + Toss 실거래 API 연동
         </div>
       </div>
 
       {/* Broker Tab Selector */}
-      <div className="flex bg-slate-950 p-1.5 rounded-xl border border-slate-800 gap-2">
+      <div className="flex bg-muted p-1.5 rounded-xl border border-border gap-2">
         {([
           ['kis',    Database,  '한국투자증권 (KIS) 실거래 연동'],
           ['kiwoom', Layers,    '키움증권 (Kiwoom OpenAPI+)'],
@@ -3564,10 +3793,10 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
         ] as [Broker, React.ElementType, string][]).map(([id, Icon, label]) => (
           <button key={id}
             onClick={() => { setActiveBroker(id); setTestResult('idle'); setTestLogs([]); }}
-            className={`flex-1 py-3 px-4 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+            className={`flex-1 py-3 px-4 rounded-lg text-sm font-semibold transition flex items-center justify-center gap-2 cursor-pointer ${
               activeBroker === id
-                ? 'bg-emerald-600 text-white shadow-lg'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
+                ? 'bg-card text-foreground shadow-sm border border-border'
+                : 'text-muted-foreground hover:text-foreground hover:bg-card/60'
             }`}>
             <Icon className="h-4 w-4 flex-shrink-0" />
             <span className="hidden sm:block">{label}</span>
@@ -3580,11 +3809,11 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
       {activeBroker === 'kis' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Left: connection settings */}
-          <div className="lg:col-span-4 bg-slate-900 border border-slate-800/80 rounded-2xl p-5 space-y-5">
-            <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+          <div className="lg:col-span-4 bg-card border border-border rounded-2xl p-5 space-y-5 shadow-sm">
+            <div className="border-b border-border pb-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Terminal className="h-4 w-4 text-emerald-400" />
-                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">한국투자증권 연동</h3>
+                <Terminal className="h-4 w-4 text-primary" />
+                <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">한국투자증권 연동</h3>
               </div>
               <StatusBadge />
             </div>
@@ -3592,7 +3821,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           </div>
 
           {/* Right: sub-tabs */}
-          <div className="lg:col-span-8 bg-slate-900 border border-slate-800/80 rounded-2xl p-5">
+          <div className="lg:col-span-8 bg-card border border-border rounded-2xl p-5 shadow-sm">
             {renderKisSubTabNav()}
             {kisSubTab === 'account'  && renderAccount()}
             {kisSubTab === 'trade'    && renderTrade()}
@@ -3606,10 +3835,10 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
       {/* ── Kiwoom: mock simulation ───────────────────────────────────────── */}
       {activeBroker === 'kiwoom' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 bg-slate-900 border border-slate-800/80 rounded-2xl p-5 space-y-5">
-            <div className="border-b border-slate-800 pb-3 flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-emerald-400" />
-              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">키움증권 연동 설정</h3>
+          <div className="lg:col-span-5 bg-card border border-border rounded-2xl p-5 space-y-5 shadow-sm">
+            <div className="border-b border-border pb-3 flex items-center gap-2">
+              <Terminal className="h-4 w-4 text-primary" />
+              <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">키움증권 연동 설정</h3>
             </div>
             <div className="space-y-4">
               <div>
@@ -3632,13 +3861,13 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
                 <input type="text" maxLength={10} value={kiwoomAccountNo}
                   onChange={e => setKiwoomAccountNo(e.target.value.replace(/\D/g, ''))}
                   placeholder="예: 5012345610"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                  className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
               </div>
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 mb-1.5">계좌 비밀번호 (4자리)</label>
                 <input type="password" maxLength={4} value={kiwoomPassword}
                   onChange={e => setKiwoomPassword(e.target.value.replace(/\D/g, ''))}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                  className="w-full bg-white border border-[#171717] rounded-[6px] px-3 py-2 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
                 <p className="text-[10px] text-slate-500 mt-1">키움 OpenAPI는 Windows 32비트 전용입니다.</p>
               </div>
               {/* Save / Clear credentials */}
@@ -3675,11 +3904,11 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           </div>
 
           <div className="lg:col-span-7 flex flex-col space-y-4">
-            <div className="flex border-b border-slate-800 text-xs">
+            <div className="flex border-b border-border text-xs">
               {([['interactive', 'API 연동 터미널'], ['script', '파이썬 즉시 실행 코드'], ['auto', '🤖 자동매매 신호']] as const).map(([id, label]) => (
                 <button key={id} onClick={() => setKiwoomSubTab(id as KiwoomSubTab)}
-                  className={`pb-2.5 px-4 font-bold transition border-b-2 cursor-pointer whitespace-nowrap ${
-                    kiwoomSubTab === id ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-slate-400 hover:text-slate-200'
+                  className={`pb-2.5 px-4 font-semibold transition border-b-2 cursor-pointer whitespace-nowrap ${
+                    kiwoomSubTab === id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}>{label}</button>
               ))}
             </div>
@@ -3688,7 +3917,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
                 {renderKiwoomAutoTrade()}
               </div>
             )}
-            <div className={`flex-1 bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl min-h-[380px] flex flex-col ${kiwoomSubTab === 'auto' ? 'hidden' : ''}`}>
+            <div className={`flex-1 bg-slate-950 border border-border rounded-2xl overflow-hidden shadow-sm min-h-[380px] flex flex-col ${kiwoomSubTab === 'auto' ? 'hidden' : ''}`}>
               {kiwoomSubTab === 'interactive' ? (
                 <div className="flex-1 flex flex-col h-full">
                   <div className="bg-slate-900 px-4 py-2.5 border-b border-slate-800 flex justify-between items-center text-[10px] font-mono text-slate-400">
@@ -3754,17 +3983,17 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
       {/* ── Toss: real API ────────────────────────────────────────────────── */}
       {activeBroker === 'toss' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-4 bg-slate-900 border border-slate-800/80 rounded-2xl p-5 space-y-5">
-            <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+          <div className="lg:col-span-4 bg-card border border-border rounded-2xl p-5 space-y-5 shadow-sm">
+            <div className="border-b border-border pb-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Terminal className="h-4 w-4 text-blue-400" />
-                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">토스증권 연동</h3>
+                <Terminal className="h-4 w-4 text-blue-500" />
+                <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">토스증권 연동</h3>
               </div>
               <TossStatusBadge />
             </div>
             {renderTossConnectionPanel()}
           </div>
-          <div className="lg:col-span-8 bg-slate-900 border border-slate-800/80 rounded-2xl p-5">
+          <div className="lg:col-span-8 bg-card border border-border rounded-2xl p-5 shadow-sm">
             {renderTossSubTabNav()}
             {tossSubTab === 'account'  && renderTossAccount()}
             {tossSubTab === 'trade'    && renderTossTrade()}
@@ -3776,9 +4005,9 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
       )}
 
       {/* Setup checklist */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-        <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+      <div className="bg-card border border-border rounded-2xl p-5 space-y-4 shadow-sm">
+        <h3 className="text-xs font-bold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+          <CheckCircle2 className="h-4 w-4 text-primary" />
           {activeBroker === 'kis' && '한국투자증권 실거래 API 가입 절차'}
           {activeBroker === 'kiwoom' && '키움증권 OpenAPI+ 사전 준비 사항'}
           {activeBroker === 'toss' && '토스증권 OpenAPI 신청 절차'}
