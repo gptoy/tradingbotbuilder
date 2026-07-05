@@ -6,7 +6,7 @@ import {
   Package, Clock, ChevronDown, ChevronUp, Zap, Save, Trash2,
   Bot, StopCircle, Activity, BarChart2
 } from 'lucide-react';
-import { computeIndicators, detectBearishDivergence, calcSwingLow } from '../utils';
+import { computeIndicators, calcSwingLow } from '../utils';
 import type { MarketBar, BotConfig, SignalClass } from '../types';
 import AutoTradeChart, { TradeMarker } from './AutoTradeChart';
 
@@ -190,7 +190,7 @@ export default function KisVerificationPanel() {
   const [autoLastPrice, setAutoLastPrice]         = useState(0);
   const [autoOrderQty, setAutoOrderQty]           = useState('1');
   const [autoLoadingCandles, setAutoLoadingCandles] = useState(false);
-  const [autoIndicators, setAutoIndicators]       = useState<{ rsi: number; macd: number; macdSig: number; macdHist: number } | null>(null);
+  const [autoIndicators, setAutoIndicators]       = useState<{ rsi: number; macd: number; macdSig: number; macdHist: number; strength: number; trendState: string } | null>(null);
   const [autoLogs, setAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning'; msg: string }[]>([]);
   const [autoPlacing, setAutoPlacing]             = useState(false);
   const [autoCheckInterval, setAutoCheckInterval] = useState(30); // seconds
@@ -953,28 +953,35 @@ export default function KisVerificationPanel() {
       const rsiPullback   = currRsi >= 30 && currRsi < 50;     // 눌림목 진입 구간
       const rsiOverbought = currRsi > 70;                       // 과열 → 진입 금지
 
-      const aboveHMA100   = currBar.hma100   != null && currentPrice > currBar.hma100;  // 추세 필터
-      const aboveMA20     = currBar.ma20     != null && currentPrice > currBar.ma20;    // 정배열
+      const aboveHMA100   = currBar.hma100   != null && currentPrice > currBar.hma100;
+      const aboveMA20     = currBar.ma20     != null && currentPrice > currBar.ma20;
       const volumeConfirm = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
 
-      const hasBearishDiv = detectBearishDivergence(computed);
+      // MACDRSI Enhanced: 신호 강도 + 다이버전스 (computeIndicators에서 이미 계산됨)
+      const strength      = currBar.signalStrength ?? 0;
+      const hasBullishDiv = currBar.bullishDiv ?? false;
+      const hasBearishDiv = currBar.bearishDiv ?? false;
 
       let buyScore = 0;
-      if (isGoldenCross)                         buyScore += 3; // 핵심 시그널
-      else if (histTurningUp)                    buyScore += 1; // 프리-시그널
-      if (histRising)                            buyScore += 1; // 모멘텀 방향
-      if (rsiPrime)                              buyScore += 2; // 최우선 구간
-      else if (rsiPullback && aboveMA20)         buyScore += 1; // 눌림목 진입
-      if (volumeConfirm)                         buyScore += 1; // 거래량 확인
-      if (aboveHMA100)                           buyScore += 1; // HMA100 위
+      if (isGoldenCross)                         buyScore += 3;
+      else if (histTurningUp)                    buyScore += 1;
+      if (histRising)                            buyScore += 1;
+      if (rsiPrime)                              buyScore += 2;
+      else if (rsiPullback && aboveMA20)         buyScore += 1;
+      if (volumeConfirm)                         buyScore += 1;
+      if (aboveHMA100)                           buyScore += 1;
+      // 신호 강도 보너스 (MACD 50% + RSI 30% + Volume 20%)
+      if (strength > 50)                         buyScore += 2;
+      else if (strength > 20)                    buyScore += 1;
+      if (hasBullishDiv)                         buyScore += 1;
 
-      const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
+      const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross) || strength < -50;
 
       let signal: SignalClass;
-      if (isDangerous)                                      signal = '위험';
-      else if (buyScore >= 6 && isGoldenCross && rsiPrime) signal = '매수후보'; // 골든크로스 + RSI 모멘텀 구간
-      else if (buyScore >= 4)                               signal = '관심';
-      else                                                  signal = '관망';
+      if (isDangerous)                                                        signal = '위험';
+      else if (buyScore >= 6 && isGoldenCross && rsiPrime && strength > 0)  signal = '매수후보';
+      else if (buyScore >= 4 || (hasBullishDiv && strength > 30))            signal = '관심';
+      else                                                                    signal = '관망';
 
       // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절
       const position = autoPositionRef.current;
@@ -992,7 +999,7 @@ export default function KisVerificationPanel() {
       }
 
       setAutoSignal(signal);
-      setAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
+      setAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist, strength, trendState: currBar.trendState ?? 'neutral' });
 
       const flags = [
         isGoldenCross   ? '골든크로스' : null,
@@ -1323,7 +1330,10 @@ export default function KisVerificationPanel() {
       const aboveMA20     = curr.ma20     != null && currentPrice > curr.ma20;
       const volumeConfirm = curr.volumeMA != null && (curr.volume ?? 0) > curr.volumeMA;
 
-      const hasBearishDiv = detectBearishDivergence(computed);
+      // MACDRSI Enhanced
+      const strength      = curr.signalStrength ?? 0;
+      const hasBullishDiv = curr.bullishDiv ?? false;
+      const hasBearishDiv = curr.bearishDiv ?? false;
 
       let buyScore = 0;
       if (isGoldenCross)                         buyScore += 3;
@@ -1333,13 +1343,16 @@ export default function KisVerificationPanel() {
       else if (rsiPullback && aboveMA20)         buyScore += 1;
       if (volumeConfirm)                         buyScore += 1;
       if (aboveHMA100)                           buyScore += 1;
+      if (strength > 50)                         buyScore += 2;
+      else if (strength > 20)                    buyScore += 1;
+      if (hasBullishDiv)                         buyScore += 1;
 
-      const isDangerousToss = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
+      const isDangerousToss = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross) || strength < -50;
 
       let signal: SignalClass = '관망';
-      if (isDangerousToss)                                  signal = '위험';
-      else if (buyScore >= 6 && isGoldenCross && rsiPrime)  signal = '매수후보';
-      else if (buyScore >= 4)                               signal = '관심';
+      if (isDangerousToss)                                                        signal = '위험';
+      else if (buyScore >= 6 && isGoldenCross && rsiPrime && strength > 0)       signal = '매수후보';
+      else if (buyScore >= 4 || (hasBullishDiv && strength > 30))                signal = '관심';
 
       // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절
       const tossPosition = tossAutoPositionRef.current;
@@ -1527,7 +1540,10 @@ export default function KisVerificationPanel() {
             const aboveMA20     = curr.ma20     != null && currentPrice > curr.ma20;
             const volumeConfirm = curr.volumeMA != null && (curr.volume ?? 0) > curr.volumeMA;
 
-            const hasBearishDiv = detectBearishDivergence(computed);
+            // MACDRSI Enhanced
+            const strength      = curr.signalStrength ?? 0;
+            const hasBullishDiv = curr.bullishDiv ?? false;
+            const hasBearishDiv = curr.bearishDiv ?? false;
 
             let buyScore = 0;
             if (isGoldenCross)                         buyScore += 3;
@@ -1537,19 +1553,22 @@ export default function KisVerificationPanel() {
             else if (rsiPullback && aboveMA20)         buyScore += 1;
             if (volumeConfirm)                         buyScore += 1;
             if (aboveHMA100)                           buyScore += 1;
+            if (strength > 50)                         buyScore += 2;
+            else if (strength > 20)                    buyScore += 1;
+            if (hasBullishDiv)                         buyScore += 1;
 
-            const isDangerousKiwoom = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
+            const isDangerousKiwoom = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross) || strength < -50;
 
             let signal: SignalClass = '관망';
-            if (isDangerousKiwoom)                                signal = '위험';
-            else if (buyScore >= 6 && isGoldenCross && rsiPrime)  signal = '매수후보';
-            else if (buyScore >= 4)                               signal = '관심';
+            if (isDangerousKiwoom)                                                       signal = '위험';
+            else if (buyScore >= 6 && isGoldenCross && rsiPrime && strength > 0)        signal = '매수후보';
+            else if (buyScore >= 4 || (hasBullishDiv && strength > 30))                 signal = '관심';
 
             setKiwoomAutoSignal(signal);
             setKiwoomAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist });
 
             addKiwoomAutoLog(
-              `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8)${signal === '매수후보' ? ' → Python 스크립트로 매수 실행' : signal === '위험' ? ' → Python 스크립트로 매도 실행' : ''}`,
+              `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} 신호강도:${strength > 0 ? '+' : ''}${strength}% (${buyScore}점)${signal === '매수후보' ? ' → Python 스크립트로 매수 실행' : signal === '위험' ? ' → Python 스크립트로 매도 실행' : ''}`,
               signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
             );
           }
@@ -2704,6 +2723,8 @@ if __name__ == "__main__":
             <div className="text-sm font-black">{autoSignal}</div>
             {autoIndicators && (
               <div className="mt-1 text-[9px] opacity-80 space-y-0.5 font-mono">
+                <div>신호강도: {autoIndicators.strength > 0 ? '+' : ''}{autoIndicators.strength}%</div>
+                <div>추세: {autoIndicators.trendState}</div>
                 <div>RSI: {autoIndicators.rsi.toFixed(1)}</div>
                 <div>MACD: {autoIndicators.macd.toFixed(2)} / Sig: {autoIndicators.macdSig.toFixed(2)}</div>
                 <div>Hist: {autoIndicators.macdHist.toFixed(3)}</div>

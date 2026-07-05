@@ -5,7 +5,7 @@ import {
   Zap, ZapOff, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { BotConfig, MarketBar, SimulatedPortfolio, Trade, LogMessage, SignalClass } from '../types';
-import { generateMockHistory, generateNextBar, computeIndicators, detectBearishDivergence, calcSwingLow } from '../utils';
+import { generateMockHistory, generateNextBar, computeIndicators, calcSwingLow } from '../utils';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
@@ -246,20 +246,29 @@ export default function TradingSimulator({ config }: Props) {
     const aboveHMA100   = curr.hma100   != null && price > curr.hma100;
     const aboveMA20     = curr.ma20     != null && price > curr.ma20;
     const volumeConfirm = curr.volumeMA != null && curr.volume > curr.volumeMA;
-    const hasBearishDiv = detectBearishDivergence(computed);
+
+    // MACDRSI Enhanced: 신호 강도 + 다이버전스
+    const strength      = curr.signalStrength ?? 0;
+    const hasBullishDiv = curr.bullishDiv ?? false;
+    const hasBearishDiv = curr.bearishDiv ?? false;
 
     let score = 0;
-    if (isGoldenCross)               score += 3;
-    else if (histTurningUp)          score += 1;
-    if (histRising)                  score += 1;
-    if (rsiPrime)                    score += 2;
-    else if (rsiPullback && aboveMA20) score += 1;
-    if (volumeConfirm)               score += 1;
-    if (aboveHMA100)                 score += 1;
+    if (isGoldenCross)                  score += 3;
+    else if (histTurningUp)             score += 1;
+    if (histRising)                     score += 1;
+    if (rsiPrime)                       score += 2;
+    else if (rsiPullback && aboveMA20)  score += 1;
+    if (volumeConfirm)                  score += 1;
+    if (aboveHMA100)                    score += 1;
+    // 신호 강도 보너스 (MACDRSI 가중 복합 점수)
+    if (strength > 50)                  score += 2;
+    else if (strength > 20)             score += 1;
+    if (hasBullishDiv)                  score += 1;
 
-    if ((rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross)) return '위험';
-    if (score >= 6 && isGoldenCross && rsiPrime) return '매수후보';
-    if (score >= 4) return '관심';
+    const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross) || strength < -50;
+    if (isDangerous) return '위험';
+    if (score >= 6 && isGoldenCross && rsiPrime && strength > 0) return '매수후보';
+    if (score >= 4 || (hasBullishDiv && strength > 30)) return '관심';
     return '관망';
   };
 
@@ -388,7 +397,10 @@ export default function TradingSimulator({ config }: Props) {
         const aboveMA20     = currBar.ma20     != null && currentPrice > currBar.ma20;
         const volumeConfirm = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
 
-        const hasBearishDiv = detectBearishDivergence(computedBars);
+        // MACDRSI Enhanced: 신호 강도 + 다이버전스
+        const strength      = currBar.signalStrength ?? 0;
+        const hasBullishDiv = currBar.bullishDiv ?? false;
+        const hasBearishDiv = currBar.bearishDiv ?? false;
 
         let buyScore = 0;
         if (isGoldenCross)                         buyScore += 3;
@@ -398,8 +410,12 @@ export default function TradingSimulator({ config }: Props) {
         else if (rsiPullback && aboveMA20)         buyScore += 1;
         if (volumeConfirm)                         buyScore += 1;
         if (aboveHMA100)                           buyScore += 1;
+        // 신호 강도 보너스
+        if (strength > 50)                         buyScore += 2;
+        else if (strength > 20)                    buyScore += 1;
+        if (hasBullishDiv)                         buyScore += 1;
 
-        const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
+        const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross) || strength < -50;
 
         // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절 (시뮬레이터 손절/익절보다 우선)
         let forceExit = false;
@@ -417,10 +433,10 @@ export default function TradingSimulator({ config }: Props) {
         }
 
         let newSignalClass: SignalClass;
-        if (isDangerous || forceExit)                             newSignalClass = '위험';
-        else if (buyScore >= 6 && isGoldenCross && rsiPrime)     newSignalClass = '매수후보';
-        else if (buyScore >= 4)                                   newSignalClass = '관심';
-        else                                                      newSignalClass = '관망';
+        if (isDangerous || forceExit)                                          newSignalClass = '위험';
+        else if (buyScore >= 6 && isGoldenCross && rsiPrime && strength > 0)  newSignalClass = '매수후보';
+        else if (buyScore >= 4 || (hasBullishDiv && strength > 30))           newSignalClass = '관심';
+        else                                                                   newSignalClass = '관망';
 
         setTimeout(() => setCurrentSignalClass(newSignalClass), 0);
 
@@ -440,7 +456,7 @@ export default function TradingSimulator({ config }: Props) {
             ].filter(Boolean).join(' ');
             trades = [...trades, { id: Math.random().toString(36).substring(2, 9), type: 'BUY', price: currentPrice, quantity: qty, amount: buyBudget, timestamp: barRef.timestamp, timeString: barRef.time, balanceAfter: cash }];
             setTimeout(() => {
-              addLog(`★ [매수후보] ${buyScore}/8점 | ${flags}`, 'buy');
+              addLog(`★ [매수후보] ${buyScore}점 | 신호강도 ${strength > 0 ? '+' : ''}${strength}% | ${flags}`, 'buy');
               addLog(`🛒 매수: ${Math.floor(qty)}주 @ ${currentPrice.toLocaleString()}${currentUnit}`, 'buy');
             }, 10);
           }

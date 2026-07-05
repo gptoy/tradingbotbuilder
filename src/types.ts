@@ -6,8 +6,9 @@ export interface BotConfig {
   rsiOversold: number;
   rsiOverbought: number;
   rsiLookback: number;
-  maPeriod: number;       // e.g. 20
-  volumeMAPeriod: number; // e.g. 20
+  maPeriod: number;          // e.g. 20
+  volumeMAPeriod: number;    // e.g. 20
+  volumeThreshold?: number;  // 거래량 MA 배수 (MACDRSI 기본값 1.5)
   stopLoss: number;
   takeProfit: number;
   tradeSize: number;
@@ -30,11 +31,17 @@ export interface MarketBar {
   macd?: number;
   macdSignal?: number;
   macdHist?: number;
-  ma?: number;       // configurable period SMA (for 5-condition scoring)
-  volumeMA?: number; // volume moving average
-  ma20?: number;     // 20-day SMA
-  ma60?: number;     // 60-day SMA
-  ma120?: number;    // 120-day SMA
+  ma?: number;             // configurable period SMA (for 5-condition scoring)
+  volumeMA?: number;       // volume moving average
+  ma20?: number;           // 20-day SMA
+  ma60?: number;           // 60-day SMA
+  ma120?: number;          // 120-day SMA
+  hma100?: number;         // 100-period Hull Moving Average (Ross Cameron trend filter)
+  // ── MACDRSI Enhanced (panzmoravylab/MACDRSI_Indicator 기준) ──────────────
+  signalStrength?: number; // 종합 신호 강도 -100~+100 (MACD 50% + RSI 30% + Volume 20%)
+  trendState?: 'strong_up' | 'weak_up' | 'neutral' | 'weak_down' | 'strong_down';
+  bullishDiv?: boolean;    // 상승 다이버전스 (가격 신저점 + RSI 고저점)
+  bearishDiv?: boolean;    // 하락 다이버전스 (가격 신고점 + RSI 저고점)
 }
 
 export interface Trade {
