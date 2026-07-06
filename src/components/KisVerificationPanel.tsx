@@ -640,6 +640,17 @@ export default function KisVerificationPanel() {
   };
 
   const handleDisconnect = () => {
+    // 자동매매 실행 중이면 함께 중단
+    if (autoEnabledRef.current) {
+      autoEnabledRef.current = false;
+      setAutoEnabled(false);
+      if (autoIntervalRef.current) { clearInterval(autoIntervalRef.current); autoIntervalRef.current = null; }
+      addAutoLog('KIS 연결 해제 — 자동매매도 함께 중단됨', 'warning');
+      try {
+        const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}');
+        localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, active: false }));
+      } catch {}
+    }
     setKisToken('');
     setTokenExpiry(null);
     setConnStatus('disconnected');
@@ -803,6 +814,7 @@ export default function KisVerificationPanel() {
         kisTokenRef.current = data.access_token; setKisToken(data.access_token);
         const exp = new Date(); exp.setSeconds(exp.getSeconds() + (data.expires_in ?? 86400));
         tokenExpiryRef.current = exp; setTokenExpiry(exp);
+        setConnStatus('connected'); // UI 패널 상태도 복원
         addAutoLog('KIS 토큰 갱신 완료', 'success');
         // 시뮬레이터 세션 토큰 갱신
         try {
@@ -813,7 +825,7 @@ export default function KisVerificationPanel() {
         } catch {}
         return true;
       }
-      addAutoLog(`KIS 토큰 갱신 실패: ${data.msg1 ?? '오류'}`, 'error');
+      addAutoLog(`KIS 토큰 갱신 실패: ${data.msg1 ?? '오류'} — 다음 주기에 재시도`, 'error');
       return false;
     } catch (e) {
       addAutoLog(`KIS 토큰 갱신 오류: ${e instanceof Error ? e.message : '네트워크'}`, 'error');
@@ -1060,7 +1072,15 @@ export default function KisVerificationPanel() {
       }
     } catch (e) {
       autoConsecErrorsRef.current++;
-      addAutoLog(`오류 (${autoConsecErrorsRef.current}회): ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
+      const errMsg = e instanceof Error ? e.message : '알 수 없는 오류';
+      if (autoConsecErrorsRef.current >= 10) {
+        addAutoLog(`❌ 연속 ${autoConsecErrorsRef.current}회 오류 — 자동매매를 자동 중단합니다. (${errMsg})`, 'error');
+        autoEnabledRef.current = false; setAutoEnabled(false);
+        if (autoIntervalRef.current) { clearInterval(autoIntervalRef.current); autoIntervalRef.current = null; }
+        try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, active: false })); } catch {}
+      } else {
+        addAutoLog(`오류 (${autoConsecErrorsRef.current}회): ${errMsg}`, 'error');
+      }
     }
   }, [addAutoLog, refreshKisTokenIfNeeded, loadAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1099,10 +1119,7 @@ export default function KisVerificationPanel() {
     } catch {}
   }, [addAutoLog]);
 
-  // 자동매매 활성 중 연결 끊기면 자동 중지
-  useEffect(() => {
-    if (connStatus !== 'connected' && autoEnabled) stopAutoTrade();
-  }, [connStatus, autoEnabled, stopAutoTrade]);
+  // 자동매매는 refreshKisTokenIfNeeded로 토큰을 자체 관리 — connStatus(UI 패널 전용)에 의존하지 않음
 
   // ── 장 시간 자동 스케줄러 helpers ─────────────────────────────────────────
   function isKoreanMarketOpen(): boolean {
@@ -1409,7 +1426,15 @@ export default function KisVerificationPanel() {
       }
     } catch (e) {
       tossAutoConsecErrorsRef.current++;
-      addTossAutoLog(`오류 (${tossAutoConsecErrorsRef.current}회): ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
+      const errMsg = e instanceof Error ? e.message : '알 수 없는 오류';
+      if (tossAutoConsecErrorsRef.current >= 10) {
+        addTossAutoLog(`❌ 연속 ${tossAutoConsecErrorsRef.current}회 오류 — 자동매매를 자동 중단합니다. (${errMsg})`, 'error');
+        tossAutoEnabledRef.current = false; setTossAutoEnabled(false);
+        if (tossAutoIntervalRef.current) { clearInterval(tossAutoIntervalRef.current); tossAutoIntervalRef.current = null; }
+        try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:toss') ?? '{}'); localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...s, active: false })); } catch {}
+      } else {
+        addTossAutoLog(`오류 (${tossAutoConsecErrorsRef.current}회): ${errMsg}`, 'error');
+      }
     }
   }, [addTossAutoLog, refreshTossTokenIfNeeded, loadTossAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1559,7 +1584,15 @@ export default function KisVerificationPanel() {
       }
     } catch (e) {
       kiwoomAutoConsecErrorsRef.current++;
-      addKiwoomAutoLog(`오류 (${kiwoomAutoConsecErrorsRef.current}회): ${e instanceof Error ? e.message : '알 수 없는 오류'}`, 'error');
+      const errMsg = e instanceof Error ? e.message : '알 수 없는 오류';
+      if (kiwoomAutoConsecErrorsRef.current >= 10) {
+        addKiwoomAutoLog(`❌ 연속 ${kiwoomAutoConsecErrorsRef.current}회 오류 — 신호 모니터를 자동 중단합니다. (${errMsg})`, 'error');
+        kiwoomAutoEnabledRef.current = false; setKiwoomAutoEnabled(false);
+        if (kiwoomAutoIntervalRef.current) { clearInterval(kiwoomAutoIntervalRef.current); kiwoomAutoIntervalRef.current = null; }
+        try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kiwoom') ?? '{}'); localStorage.setItem('tbbuilder:auto:kiwoom', JSON.stringify({ ...s, active: false })); } catch {}
+      } else {
+        addKiwoomAutoLog(`오류 (${kiwoomAutoConsecErrorsRef.current}회): ${errMsg}`, 'error');
+      }
     }
   }, [addKiwoomAutoLog, loadKiwoomAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2136,8 +2169,13 @@ if __name__ == "__main__":
         <label className="block text-[11px] font-bold text-slate-400 mb-1.5">서버 구분</label>
         <div className="grid grid-cols-2 gap-2">
           {(['virtual', 'real'] as const).map(s => (
-            <button key={s} onClick={() => { setKisServerType(s); handleDisconnect(); }}
-              className={`py-2 px-3 rounded-lg text-xs font-bold border transition cursor-pointer ${
+            <button key={s}
+              onClick={() => { setKisServerType(s); handleDisconnect(); }}
+              disabled={autoEnabled}
+              title={autoEnabled ? '자동매매 실행 중에는 서버 전환 불가' : undefined}
+              className={`py-2 px-3 rounded-lg text-xs font-bold border transition ${
+                autoEnabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+              } ${
                 kisServerType === s
                   ? s === 'real'
                     ? 'bg-rose-600 border-rose-600 text-white shadow-sm'
