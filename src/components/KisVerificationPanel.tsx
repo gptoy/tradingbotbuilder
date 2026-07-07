@@ -1044,7 +1044,14 @@ export default function KisVerificationPanel() {
             addAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${odno})`, 'success');
             saveTrade(autoSymbolRef.current, 'BUY', currentPrice, 'kis', qty);
             try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: newPos })); } catch {}
-          } else { addAutoLog(`❌ 매수 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error'); }
+          } else {
+            const errMsg = d.msg1 ?? d.msg_cd ?? '오류';
+            const isInsufficientBalance = errMsg.includes('잔고') || errMsg.includes('부족') || errMsg.includes('주문가능') || errMsg.toLowerCase().includes('balance');
+            addAutoLog(
+              `❌ 매수 실패: ${errMsg}${isInsufficientBalance ? ' → KIS Developers(apiportal.koreainvestment.com) 모의투자 계좌에서 가상 잔고를 확인하세요' : ''}`,
+              'error',
+            );
+          }
         } finally { autoPlacingRef.current = false; setAutoPlacing(false); }
 
       } else if (signal === '위험' && position && !autoPlacingRef.current) {
@@ -1088,6 +1095,21 @@ export default function KisVerificationPanel() {
     if (!canoRef.current) { addAutoLog('계좌번호를 먼저 입력하고 KIS에 연결하세요.', 'error'); return; }
     addAutoLog(`${autoSymbolRef.current} 일봉 200개 로드 중…`, 'info');
     try {
+      // 잔고 사전 확인
+      try {
+        const balRes = await fetch('/api/kis/balance', {
+          headers: kisHeadersFromRef() as Record<string, string>,
+        });
+        const balData = await balRes.json();
+        const availCash = parseInt(balData.output2?.[0]?.dnca_tot_amt ?? '0');
+        if (availCash === 0) {
+          addAutoLog('⚠ 모의투자 잔고 0원 — 매수 신호 발생 시 주문이 실패할 수 있습니다.', 'warning');
+          addAutoLog('  → KIS Developers(apiportal.koreainvestment.com) 모의투자 계좌에서 가상 자금을 확인하세요.', 'warning');
+        } else {
+          addAutoLog(`💰 주문가능금액: ${availCash.toLocaleString()}원`, 'info');
+        }
+      } catch { /* 잔고 조회 실패는 무시하고 계속 */ }
+
       await loadAutoCandles();
       addAutoLog('캔들 로드 완료. 자동매매 시작!', 'success');
       autoEnabledRef.current = true;
