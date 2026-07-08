@@ -410,19 +410,50 @@ export default function KisVerificationPanel() {
             else                { setKisVirtualAccountNo(creds.accountNo); }
 
             try {
-              const tokRes  = await fetch('/api/kis/token', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ appKey: creds.appKey, appSecret: creds.appSecret }),
-              });
-              const tokData = await tokRes.json();
-              if (tokData.access_token) {
-                kisTokenRef.current = tokData.access_token;
-                setKisToken(tokData.access_token);
-                const exp = new Date();
-                exp.setSeconds(exp.getSeconds() + (tokData.expires_in ?? 86400));
-                tokenExpiryRef.current = exp; setTokenExpiry(exp);
-                setConnStatus('connected');
+              // 기존 세션 토큰이 유효(23h 이내)하면 재사용 — 불필요한 토큰 재발급 방지
+              const SESSION_TTL = 23 * 60 * 60 * 1000;
+              const savedSession = JSON.parse(localStorage.getItem('tbbuilder:kis:live-session') ?? '{}');
+              const sessionAge   = savedSession.savedAt ? Date.now() - savedSession.savedAt : Infinity;
+              const reuseToken   = savedSession.token && sessionAge < SESSION_TTL;
 
+              let resolvedToken = '';
+              let resolvedExp   = new Date();
+
+              if (reuseToken) {
+                resolvedToken = savedSession.token;
+                resolvedExp   = new Date(savedSession.savedAt + SESSION_TTL);
+                addAutoLog('[자동 복구] 기존 세션 토큰 재사용 (만료까지 ' + Math.round((resolvedExp.getTime() - Date.now()) / 60000) + '분)', 'info');
+              } else {
+                const tokRes  = await fetch('/api/kis/token', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ appKey: creds.appKey, appSecret: creds.appSecret }),
+                });
+                const tokData = await tokRes.json();
+                if (!tokData.access_token) {
+                  addAutoLog(
+                    `자동 복구 실패 — 토큰 발급 오류: ${tokData.msg1 ?? tokData.msg_cd ?? JSON.stringify(tokData).slice(0, 120)}`,
+                    'error',
+                  );
+                  try { localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...autoKis, active: false })); } catch {}
+                  return;
+                }
+                resolvedToken = tokData.access_token;
+                resolvedExp.setSeconds(resolvedExp.getSeconds() + (tokData.expires_in ?? 86400));
+                // 새 토큰을 세션에 저장
+                try {
+                  localStorage.setItem('tbbuilder:kis:live-session', JSON.stringify({
+                    token: resolvedToken, appKey: creds.appKey, appSecret: creds.appSecret, savedAt: Date.now(),
+                  }));
+                } catch {}
+              }
+
+              kisTokenRef.current = resolvedToken;
+              setKisToken(resolvedToken);
+              tokenExpiryRef.current = resolvedExp;
+              setTokenExpiry(resolvedExp);
+              setConnStatus('connected');
+
+              if (true) {  // 항상 실행 (중첩 제거용 블록)
                 // 캔들 로드
                 const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
                 if (cRes.ok) {
@@ -441,9 +472,6 @@ export default function KisVerificationPanel() {
                 autoEnabledRef.current = true; setAutoEnabled(true);
                 autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
                 addAutoLog(`[자동 복구] 새로고침 후 KIS 자동매매 재개 (${srv === 'real' ? '실전' : '모의'} · ${sym})`, 'warning');
-              } else {
-                addAutoLog(`자동 복구 실패 (토큰 오류: ${tokData.msg1 ?? '-'}) — 수동 재시작 필요`, 'error');
-                try { localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...autoKis, active: false })); } catch {}
               }
             } catch (e) {
               addAutoLog(`자동 복구 실패 (네트워크) — 수동 재시작 필요`, 'error');
@@ -470,46 +498,65 @@ export default function KisVerificationPanel() {
           if (pos) { setTossAutoPosition(pos); tossAutoPositionRef.current = pos; }
 
           try {
-            const tokRes  = await fetch('/api/toss/token', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ clientId: tossCreds.clientId, clientSecret: tossCreds.clientSecret }),
-            });
-            const tokData = await tokRes.json();
-            if (tokData.access_token) {
-              tossTokenRef.current = tokData.access_token; setTossToken(tokData.access_token);
-              const exp = new Date(); exp.setSeconds(exp.getSeconds() + (tokData.expires_in ?? 86400));
-              tossTokenExpiryRef.current = exp; setTossTokenExpiry(exp);
+            const SESSION_TTL_TOSS = 23 * 60 * 60 * 1000;
+            const savedTossSession = JSON.parse(localStorage.getItem('tbbuilder:toss:session') ?? '{}');
+            const tossSessionAge   = savedTossSession.savedAt ? Date.now() - savedTossSession.savedAt : Infinity;
+            const reuseTossToken   = savedTossSession.token && tossSessionAge < SESSION_TTL_TOSS;
 
-              const accRes  = await fetch('/api/toss/accounts', { headers: { 'x-toss-token': tokData.access_token } });
-              const accData = await accRes.json();
-              if (accData.result?.[0]) {
-                const seq = accData.result[0].accountSeq;
-                setTossAccountSeq(seq);         tossAccountSeqRef.current = seq;
-                setTossAccountNoDisplay(accData.result[0].accountNo ?? String(seq));
-              }
-              setTossConnStatus('connected');
+            let tossResolvedToken = '';
+            let tossResolvedExp   = new Date();
 
-              const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
-              if (cRes.ok) {
-                const candles: any[] = await cRes.json();
-                if (Array.isArray(candles) && candles.length > 0) {
-                  tossAutoCandlesRef.current = candles.map((c: any) => ({
-                    time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
-                    timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
-                    open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
-                  }));
-                  tossAutoLastCandleDayRef.current = candles[candles.length - 1].date;
-                }
-              }
-              tossAutoEnabledRef.current = true; setTossAutoEnabled(true);
-              tossAutoIntervalRef.current = setInterval(runTossAutoCheck, iv * 1000);
-              addTossAutoLog(`[자동 복구] 새로고침 후 Toss 자동매매 재개 (${sym})`, 'warning');
+            if (reuseTossToken) {
+              tossResolvedToken = savedTossSession.token;
+              tossResolvedExp   = new Date(savedTossSession.savedAt + SESSION_TTL_TOSS);
+              addTossAutoLog('[자동 복구] 기존 세션 토큰 재사용', 'info');
             } else {
-              addTossAutoLog('자동 복구 실패 — 수동 재시작 필요', 'error');
-              try { localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...autoToss, active: false })); } catch {}
+              const tokRes  = await fetch('/api/toss/token', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clientId: tossCreds.clientId, clientSecret: tossCreds.clientSecret }),
+              });
+              const tokData = await tokRes.json();
+              if (!tokData.access_token) {
+                addTossAutoLog(`자동 복구 실패 — 토큰 발급 오류: ${tokData.message ?? tokData.error ?? JSON.stringify(tokData).slice(0, 120)}`, 'error');
+                try { localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...autoToss, active: false })); } catch {}
+                return;
+              }
+              tossResolvedToken = tokData.access_token;
+              tossResolvedExp.setSeconds(tossResolvedExp.getSeconds() + (tokData.expires_in ?? 86400));
+              try {
+                localStorage.setItem('tbbuilder:toss:session', JSON.stringify({ token: tossResolvedToken, savedAt: Date.now() }));
+              } catch {}
             }
-          } catch {
-            addTossAutoLog('자동 복구 실패 (네트워크) — 수동 재시작 필요', 'error');
+
+            tossTokenRef.current = tossResolvedToken; setTossToken(tossResolvedToken);
+            tossTokenExpiryRef.current = tossResolvedExp; setTossTokenExpiry(tossResolvedExp);
+
+            const accRes  = await fetch('/api/toss/accounts', { headers: { 'x-toss-token': tossResolvedToken } });
+            const accData = await accRes.json();
+            if (accData.result?.[0]) {
+              const seq = accData.result[0].accountSeq;
+              setTossAccountSeq(seq); tossAccountSeqRef.current = seq;
+              setTossAccountNoDisplay(accData.result[0].accountNo ?? String(seq));
+            }
+            setTossConnStatus('connected');
+
+            const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
+            if (cRes.ok) {
+              const candles: any[] = await cRes.json();
+              if (Array.isArray(candles) && candles.length > 0) {
+                tossAutoCandlesRef.current = candles.map((c: any) => ({
+                  time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
+                  timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
+                  open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+                }));
+                tossAutoLastCandleDayRef.current = candles[candles.length - 1].date;
+              }
+            }
+            tossAutoEnabledRef.current = true; setTossAutoEnabled(true);
+            tossAutoIntervalRef.current = setInterval(runTossAutoCheck, iv * 1000);
+            addTossAutoLog(`[자동 복구] 새로고침 후 Toss 자동매매 재개 (${sym})`, 'warning');
+          } catch (e) {
+            addTossAutoLog(`자동 복구 실패 (네트워크: ${e instanceof Error ? e.message : '오류'}) — 수동 재시작 필요`, 'error');
             try { localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...autoToss, active: false })); } catch {}
           }
         } else if (autoToss) {
