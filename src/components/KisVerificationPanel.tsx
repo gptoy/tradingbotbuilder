@@ -78,16 +78,25 @@ interface HoldingItem {
   prdt_name: string;
   hldg_qty: string;
   pchs_avg_pric: string;
+  pchs_amt: string;
+  evlu_amt: string;
   evlu_pfls_amt: string;
   evlu_pfls_rt: string;
   prpr: string;
 }
 
 interface BalanceSummary {
-  dnca_tot_amt: string;
-  tot_evlu_amt: string;
-  nass_amt: string;
-  evlu_pfls_smtl_amt: string;
+  dnca_tot_amt: string;       // 예수금 총액
+  nxdy_excc_amt: string;      // 익일정산액
+  prvs_rcdl_excc_amt: string; // D+2 정산액
+  thdt_buy_amt: string;       // 금일매수액
+  thdt_sll_amt: string;       // 금일매도액
+  thdt_tlex_amt: string;      // 제비용금액
+  ord_psbl_cash: string;      // 주문가능액
+  scts_evlu_amt: string;      // 유가평가액
+  tot_evlu_amt: string;       // 총평가금액
+  nass_amt: string;           // 순자산
+  evlu_pfls_smtl_amt: string; // 평가손익 합계
 }
 
 interface PriceInfo {
@@ -2331,78 +2340,117 @@ if __name__ == "__main__":
     </div>
   );
 
-  const renderAccount = () => (
-    <div className="space-y-4">
-      {connStatus !== 'connected' ? (
-        <div className="flex flex-col items-center justify-center py-16 text-slate-500 text-center space-y-3">
-          <Database className="h-10 w-10 text-slate-700" />
-          <p className="text-xs">왼쪽 패널에서 KIS API에 연결하면<br />계좌 잔고와 보유 주식이 표시됩니다.</p>
-        </div>
-      ) : (
-        <>
-          {/* Summary cards */}
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-bold text-slate-300">계좌 잔고 요약</h3>
-            <button onClick={() => fetchBalance()} disabled={loadingBalance}
-              className="flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 cursor-pointer">
-              <RefreshCw className={`h-3 w-3 ${loadingBalance ? 'animate-spin' : ''}`} />
-              새로고침
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              ['예수금', fmt(balanceSummary?.dnca_tot_amt ?? '0'), 'text-slate-200'],
-              ['총평가금액', fmt(balanceSummary?.tot_evlu_amt ?? '0'), 'text-slate-200'],
-              ['순자산', fmt(balanceSummary?.nass_amt ?? '0'), 'text-slate-200'],
-              ['평가손익', fmt(balanceSummary?.evlu_pfls_smtl_amt ?? '0'),
-                parseFloat(balanceSummary?.evlu_pfls_smtl_amt ?? '0') >= 0
-                  ? 'text-emerald-400' : 'text-rose-400'],
-            ].map(([label, val, cls]) => (
-              <div key={label} className="bg-slate-950 rounded-xl p-3 border border-slate-800">
-                <p className="text-[10px] text-slate-500 mb-1">{label}</p>
-                <p className={`text-sm font-bold font-mono ${cls}`}>{val}원</p>
-              </div>
-            ))}
-          </div>
+  const renderAccount = () => {
+    const bs = balanceSummary;
+    const fmtN = (v?: string) => parseInt(v ?? '0').toLocaleString();
+    const pnlTotal = parseFloat(bs?.evlu_pfls_smtl_amt ?? '0');
 
-          {/* Holdings */}
-          <div>
-            <h3 className="text-xs font-bold text-slate-300 mb-2">보유 주식</h3>
-            {holdings.length === 0 ? (
-              <p className="text-[11px] text-slate-500 text-center py-6">보유 주식이 없습니다.</p>
-            ) : (
-              <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
-                {holdings.filter(h => parseInt(h.hldg_qty) > 0).map((h, i) => {
-                  const pnl = parseFloat(h.evlu_pfls_amt);
-                  const pnlRt = parseFloat(h.evlu_pfls_rt);
-                  return (
-                    <div key={i} className="bg-slate-950 rounded-xl p-3 border border-slate-800 text-xs">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-bold text-slate-200">{h.prdt_name}</p>
-                          <p className="text-slate-500 font-mono text-[10px]">{h.pdno}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-mono font-bold text-slate-200">{fmt(h.prpr)}원</p>
-                          <p className={`text-[10px] font-mono ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {pnl >= 0 ? '+' : ''}{fmt(h.evlu_pfls_amt)}원 ({pnlRt.toFixed(2)}%)
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex gap-4 mt-2 text-[10px] text-slate-500">
-                        <span>보유: <b className="text-slate-300">{fmt(h.hldg_qty)}주</b></span>
-                        <span>평균단가: <b className="text-slate-300">{fmt(h.pchs_avg_pric)}원</b></span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+    const summaryRows: [string, string, string, string, string, string][] = [
+      ['예수금 총액',  fmtN(bs?.dnca_tot_amt),      '익일정산액',  fmtN(bs?.nxdy_excc_amt),      'D+2 정산액',  fmtN(bs?.prvs_rcdl_excc_amt)],
+      ['금일매수액',  fmtN(bs?.thdt_buy_amt),       '금일매도액',  fmtN(bs?.thdt_sll_amt),       '제비용금액',  fmtN(bs?.thdt_tlex_amt)],
+      ['주문가능액',  fmtN(bs?.ord_psbl_cash),       '유가평가액',  fmtN(bs?.scts_evlu_amt),      '총평가금액',  fmtN(bs?.tot_evlu_amt)],
+    ];
+
+    return (
+      <div className="space-y-4">
+        {connStatus !== 'connected' ? (
+          <div className="flex flex-col items-center justify-center py-16 text-slate-500 text-center space-y-3">
+            <Database className="h-10 w-10 text-slate-700" />
+            <p className="text-xs">왼쪽 패널에서 KIS API에 연결하면<br />계좌 잔고와 보유 주식이 표시됩니다.</p>
           </div>
-        </>
-      )}
-    </div>
-  );
+        ) : (
+          <>
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-bold text-slate-200">계좌잔고내역</h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  {new Date().toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' })} 체결기준
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className={`text-xs font-bold font-mono ${pnlTotal >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                  평가손익 {pnlTotal >= 0 ? '+' : ''}{fmtN(bs?.evlu_pfls_smtl_amt)}원
+                </span>
+                <button onClick={() => fetchBalance()} disabled={loadingBalance}
+                  className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer transition">
+                  <RefreshCw className={`h-3 w-3 ${loadingBalance ? 'animate-spin' : ''}`} />
+                  새로고침
+                </button>
+              </div>
+            </div>
+
+            {/* 잔고 요약 3×3 그리드 */}
+            <div className="border border-slate-700 rounded-lg overflow-hidden">
+              {summaryRows.map((row, ri) => (
+                <div key={ri} className={`grid grid-cols-3 divide-x divide-slate-700 ${ri > 0 ? 'border-t border-slate-700' : ''}`}>
+                  {([0, 2, 4] as const).map((idx) => (
+                    <div key={idx} className="px-3 py-2.5 bg-slate-950">
+                      <p className="text-[10px] text-slate-500 mb-0.5">{row[idx]}</p>
+                      <p className="text-xs font-mono font-bold text-slate-200">{row[idx + 1]}</p>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+
+            {/* 보유종목 테이블 */}
+            <div>
+              <h3 className="text-xs font-bold text-slate-300 mb-2">보유종목</h3>
+              {holdings.filter(h => parseInt(h.hldg_qty) > 0).length === 0 ? (
+                <p className="text-[11px] text-slate-500 text-center py-6 border border-slate-800 rounded-lg">
+                  보유 종목이 없습니다.
+                </p>
+              ) : (
+                <div className="border border-slate-700 rounded-lg overflow-hidden">
+                  {/* Table header */}
+                  <div className="grid grid-cols-6 bg-slate-900 border-b border-slate-700">
+                    {['종목명', '수량', '매입평균', '현재가', '평가금액', '평가손익'].map(col => (
+                      <div key={col} className="px-2 py-2 text-[10px] font-bold text-slate-400 text-center">
+                        {col}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Table rows */}
+                  <div className="max-h-[280px] overflow-y-auto">
+                    {holdings.filter(h => parseInt(h.hldg_qty) > 0).map((h, i) => {
+                      const pnl = parseFloat(h.evlu_pfls_amt);
+                      const pnlRt = parseFloat(h.evlu_pfls_rt);
+                      const isGain = pnl >= 0;
+                      return (
+                        <div key={i} className={`grid grid-cols-6 text-xs ${i > 0 ? 'border-t border-slate-800' : ''} hover:bg-slate-900/60 transition`}>
+                          <div className="px-2 py-2.5">
+                            <p className="font-bold text-slate-200 truncate">{h.prdt_name}</p>
+                            <p className="text-[9px] text-slate-500 font-mono">{h.pdno}</p>
+                          </div>
+                          <div className="px-2 py-2.5 text-center font-mono text-slate-300">
+                            {fmtN(h.hldg_qty)}
+                          </div>
+                          <div className="px-2 py-2.5 text-center font-mono text-slate-300">
+                            {parseFloat(h.pchs_avg_pric).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                          <div className="px-2 py-2.5 text-center font-mono text-slate-200 font-bold">
+                            {fmtN(h.prpr)}
+                          </div>
+                          <div className="px-2 py-2.5 text-center font-mono text-slate-300">
+                            {fmtN(h.evlu_amt || h.prpr)}
+                          </div>
+                          <div className={`px-2 py-2.5 text-center font-mono font-bold ${isGain ? 'text-rose-400' : 'text-blue-400'}`}>
+                            <p>{isGain ? '+' : ''}{fmtN(h.evlu_pfls_amt)}</p>
+                            <p className="text-[9px]">({pnlRt >= 0 ? '+' : ''}{pnlRt.toFixed(2)}%)</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
 
   const renderTrade = () => (
     <div className="space-y-4">
