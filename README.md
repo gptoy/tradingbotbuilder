@@ -1,20 +1,250 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# 자산 관리 자동매매 시스템
 
-# Run and deploy your AI Studio app
+> 코스피 상위 20개 종목 동시 감시 · Ross Cameron MACD+RSI 전략 · KIS / 토스증권 / 키움증권 연동
 
-This contains everything you need to run your app locally.
+---
 
-View your app in AI Studio: https://ai.studio/apps/5c1c93fa-1a29-48fb-8515-ce05bc8d5633
+## 개요
 
-## Run Locally
+한국 주식시장(KOSPI) 상위 20개 종목을 실시간으로 감시하고, Ross Cameron의 모멘텀 전략(MACD 골든크로스 + RSI 프라임존)을 기반으로 자동 매수/매도를 실행하는 웹 기반 트레이딩 봇 빌더입니다.
 
-**Prerequisites:**  Node.js
+KIS(한국투자증권) 모의/실전 투자, 토스증권 Open API를 직접 연동하며, 브라우저에서 실시간으로 포트폴리오와 매매 현황을 확인할 수 있습니다.
 
+---
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## 주요 기능
+
+### 자동매매
+- **코스피 TOP 20** 동시 감시 (삼성전자 ~ SK이노베이션)
+- **Ross Cameron MACD+RSI 전략** 기반 자동 매수/매도
+  - 골든크로스(+3점) + 히스토그램 상승(+1점) + RSI 50-70(+2점) + 거래량(+1점) + HMA100(+1점)
+  - 6점 이상 + 골든크로스 + RSI 모멘텀 → **매수**
+  - RSI 과열 + 데드크로스 → **매도**
+  - 스윙저점 손절 / RR 1:2 익절
+- **장 시간 자동 스케줄러**: 09:00 자동 시작, 15:30 자동 중지
+- **자동 복구**: 새로고침 후 세션 토큰 재사용(23시간 유효) 및 자동매매 재개
+
+### 브로커 연동
+| 브로커 | 모의투자 | 실전투자 | 자동매매 |
+|--------|---------|---------|---------|
+| KIS (한국투자증권) | ✅ | ✅ | ✅ |
+| 토스증권 | — | ✅ | ✅ |
+| 키움증권 | — | — | 신호 모니터 (Windows 전용) |
+
+### 대시보드
+- KOSPI / KOSDAQ / USD-KRW 실시간 지수
+- KIS 계좌 잔고: 예수금, 주문가능액, 총평가금액, 평가손익
+- 보유 종목 현황 테이블
+
+### 백테스트 / 시뮬레이터
+- 과거 일봉 데이터 기반 전략 검증
+- MACD / RSI / MA 파라미터 슬라이더 조정
+- 손절/익절 비율 설정
+
+---
+
+## 기술 스택
+
+| 분류 | 기술 |
+|------|------|
+| 프론트엔드 | React 19, TypeScript, Vite 6 |
+| 스타일 | Tailwind CSS v4, shadcn/ui, Radix UI |
+| 아이콘 / 애니메이션 | Lucide React, Motion |
+| API 프록시 | Vite 커스텀 미들웨어 (Express) |
+| 외부 API | KIS Open Trading API, 토스증권 Open API, Naver Finance |
+
+---
+
+## 아키텍처
+
+```
+브라우저 (React SPA)
+    │
+    ├─ Vite Dev Server (미들웨어 프록시)
+    │      ├─ /api/market/indices   → Naver Finance m.stock API
+    │      ├─ /api/stock/:code/*    → Naver fchart (캔들 데이터)
+    │      ├─ /api/kis/*            → KIS Open Trading API
+    │      │       모의: openapivts.koreainvestment.com:29443
+    │      │       실전: openapi.koreainvestment.com:9443
+    │      └─ /api/toss/*           → openapi.tossinvest.com
+    │
+    └─ localStorage (자격증명 / 세션 토큰 / 포지션 상태)
+           tbbuilder:kis:live-session   — KIS 토큰 (24시간)
+           tbbuilder:kis:virtual        — KIS 계좌 정보
+           tbbuilder:toss:session       — Toss 토큰
+           tbbuilder:auto:kis           — KIS 자동매매 상태/포지션
+           tbbuilder:auto:toss          — Toss 자동매매 상태/포지션
+           tbbuilder:trades             — 체결 내역
+```
+
+---
+
+## 설치 및 실행
+
+### 요구사항
+- Node.js 18+
+- KIS Open Trading API 계정 (모의투자 또는 실전)
+- 토스증권 Open API 계정 (선택)
+
+### 설치
+
+```bash
+git clone https://github.com/gptoy/tradingbotbuilder.git
+cd tradingbotbuilder
+npm install
+```
+
+### 실행
+
+```bash
+npm run dev
+```
+
+브라우저에서 `http://localhost:3000` 접속
+
+### 빌드
+
+```bash
+npm run build
+```
+
+---
+
+## API 키 설정
+
+API 키는 브라우저 UI에서 직접 입력합니다. 서버나 파일에 저장되지 않습니다.
+
+### KIS (한국투자증권)
+
+1. **자동매매 연동** 탭 → **KIS** 탭
+2. App Key / App Secret / 계좌번호 입력
+3. 모의투자 / 실전투자 선택 후 **연결**
+
+> KIS Open Trading API 신청: https://apiportal.koreainvestment.com
+
+### 토스증권
+
+1. **자동매매 연동** 탭 → **토스증권** 탭
+2. Client ID / Client Secret 입력 후 **연결**
+
+> 토스증권 Open API 신청: https://openapi.tossinvest.com
+
+---
+
+## 자동매매 사용법
+
+1. KIS 또는 토스증권 탭에서 연결 완료
+2. **자동매매** 서브탭으로 이동
+3. 1회 주문수량 / 조회주기(초) 설정
+4. **코스피 TOP 20 자동매매 시작** 클릭
+5. 감시 테이블에서 실시간 신호 / 포지션 확인
+
+### 실시간 UI 구성
+
+```
+┌─ 상태 배너 ────────────────────────────────────────────────┐
+│ 🟢 코스피 TOP 20 감시 중 · 30s · 마지막: 14:32:10 · 2종목  │
+└────────────────────────────────────────────────────────────┘
+┌─ 신호 알림 (발생 시 pulse) ────────────────────────────────┐
+│ ▲ 매수후보  삼성전자  62,500원    ▼ 위험  SK이노베이션        │
+└────────────────────────────────────────────────────────────┘
+┌─ 포트폴리오 요약 ──┐  ┌─ 최근 매매 피드 ──────────────────┐
+│ 보유 2종목          │  │ ▲ 매수  삼성전자  62,500원  14:25 │
+│ 평가손익 +3,200원   │  │ ▼ 매도  SK하이닉  202,000  13:10 │
+│ (+1.2%)            │  │ ▲ 매수  NAVER    78,300원  09:05 │
+└────────────────────┘  └────────────────────────────────────┘
+┌─ 감시 종목 테이블 ─────────────────────────────────────────┐
+│ 종목      현재가      신호    점수  RSI   포지션/손익        │
+│ 삼성전자  63,200원   관심    5/8   58.3  1주 @62,500 +1.1% │
+│ SK하이닉  202,000원  매수후보 7/8   62.1  —                 │
+│ ...                                                         │
+└────────────────────────────────────────────────────────────┘
+┌─ 로그 ──────── [전체 | 매매만] ────────────────────────────┐
+│ 14:32  [삼성전자] 관심 63,200원 RSI:58.3 (5/8)             │
+│ 14:25  ✅ [삼성전자] 매수 완료: 1주 @ 62,500원             │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 감시 종목 (코스피 TOP 20)
+
+| # | 코드 | 종목 | # | 코드 | 종목 |
+|---|------|------|---|------|------|
+| 1 | 005930 | 삼성전자 | 11 | 035720 | 카카오 |
+| 2 | 000660 | SK하이닉스 | 12 | 003550 | LG |
+| 3 | 207940 | 삼성바이오 | 13 | 034730 | SK |
+| 4 | 005380 | 현대차 | 14 | 028260 | 삼성물산 |
+| 5 | 035420 | NAVER | 15 | 012330 | 현대모비스 |
+| 6 | 000270 | 기아 | 16 | 066570 | LG전자 |
+| 7 | 051910 | LG화학 | 17 | 032830 | 삼성생명 |
+| 8 | 068270 | 셀트리온 | 18 | 086790 | 하나금융 |
+| 9 | 105560 | KB금융 | 19 | 316140 | 우리금융 |
+| 10 | 055550 | 신한지주 | 20 | 096770 | SK이노베이션 |
+
+---
+
+## 매매 전략 상세
+
+### Ross Cameron MACD+RSI 모멘텀 전략
+
+```
+매수 조건 (점수 기반):
+  ① MACD 골든크로스            +3점  ← 필수
+  ② MACD 히스토그램 증가       +1점
+  ③ RSI 50-70 (프라임존)       +2점  ← 필수
+  ④ RSI 30-50 + MA20 위        +1점  (③ 대체)
+  ⑤ 거래량 > 거래량 이동평균   +1점
+  ⑥ 가격 > HMA100              +1점
+                               ─────
+                               총 8점 만점
+
+  매수 실행: 6점+ AND 골든크로스 AND RSI 50-70 동시 충족
+
+매도 조건:
+  ① RSI > 70 + MACD 데드크로스    → 위험 신호
+  ② 베어리시 다이버전스 + 데드크로스 → 위험 신호
+  ③ 현재가 ≤ 스윙저점(10봉)       → 손절 실행
+  ④ 현재가 ≥ 진입가 + 리스크 × 2  → RR 1:2 익절
+```
+
+---
+
+## 프로젝트 구조
+
+```
+trading-bot-builder/
+├── src/
+│   ├── App.tsx                       # 메인 앱 (탭 라우팅, 헤더, 시장 지수바)
+│   ├── components/
+│   │   ├── KisVerificationPanel.tsx  # KIS/Toss/Kiwoom 자동매매 메인 패널
+│   │   ├── DashboardPanel.tsx        # 대시보드 (잔고, 보유종목, KIS 모의투자)
+│   │   ├── BacktestPanel.tsx         # 백테스트 패널
+│   │   ├── TradingSimulator.tsx      # 가상 매매 시뮬레이터
+│   │   ├── AutoTradeChart.tsx        # 자동매매 실시간 차트
+│   │   ├── InteractiveCodeViewer.tsx # Python 코드 생성기
+│   │   ├── SetupGuide.tsx            # 구축 가이드
+│   │   └── ui/                       # shadcn/ui 기본 컴포넌트
+│   ├── utils.ts                      # 지표 계산 (MACD, RSI, HMA, 스윙저점)
+│   ├── types.ts                      # 공통 타입 정의
+│   └── codeGenerator.ts              # 키움증권용 Python 코드 생성
+├── vite.config.ts                    # Vite 설정 + API 프록시 플러그인
+└── package.json
+```
+
+---
+
+## 주의사항
+
+- **개인 투자용** 시스템입니다. 투자 결과는 본인 책임입니다.
+- API 키는 브라우저 localStorage에만 저장되며 외부 서버로 전송되지 않습니다.
+- **모의투자로 충분히 테스트한 후** 실전투자를 사용하세요.
+- 일봉 기반 전략으로 신호 발생 빈도가 낮을 수 있습니다.
+- KIS API 토큰은 24시간 유효하며, 만료 전 자동 갱신됩니다.
+- 키움증권 자동매매는 Windows 32bit 환경에서만 실행 가능합니다.
+
+---
+
+## 라이선스
+
+MIT License — 개인 학습 및 비상업적 사용에 한합니다.
