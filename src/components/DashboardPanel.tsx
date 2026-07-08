@@ -1,6 +1,31 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Bot, ZapOff, TrendingUp, TrendingDown, Minus, Calendar, Activity } from 'lucide-react';
+import { RefreshCw, Bot, ZapOff, TrendingUp, TrendingDown, Minus, Calendar, Activity, Wallet } from 'lucide-react';
 import { cn } from '../lib/utils';
+
+interface KisBalanceSummary {
+  dnca_tot_amt: string;
+  nxdy_excc_amt: string;
+  prvs_rcdl_excc_amt: string;
+  thdt_buy_amt: string;
+  thdt_sll_amt: string;
+  thdt_tlex_amt: string;
+  ord_psbl_cash: string;
+  scts_evlu_amt: string;
+  tot_evlu_amt: string;
+  nass_amt: string;
+  evlu_pfls_smtl_amt: string;
+}
+
+interface KisHolding {
+  pdno: string;
+  prdt_name: string;
+  hldg_qty: string;
+  pchs_avg_pric: string;
+  prpr: string;
+  evlu_amt: string;
+  evlu_pfls_amt: string;
+  evlu_pfls_rt: string;
+}
 
 interface AutoState {
   active: boolean;
@@ -102,6 +127,9 @@ export default function DashboardPanel() {
   const [periodStartPrice, setPeriodStartPrice] = useState<number | null>(null);
   const [kospi,   setKospi]   = useState<{ price: number; change: number } | null>(null);
   const [kosdaq,  setKosdaq]  = useState<{ price: number; change: number } | null>(null);
+  const [kisBalance,  setKisBalance]  = useState<KisBalanceSummary | null>(null);
+  const [kisHoldings, setKisHoldings] = useState<KisHolding[]>([]);
+  const [kisBalanceLoading, setKisBalanceLoading] = useState(false);
 
   const anyActive     = kisAuto.active || tossAuto.active || kiwoomAuto.active;
   const primarySymbol = (kisAuto.active && kisAuto.symbol)       ? kisAuto.symbol
@@ -166,6 +194,33 @@ export default function DashboardPanel() {
     setLoading(false);
   }, []);
 
+  const fetchKisBalance = useCallback(async () => {
+    try {
+      const session = JSON.parse(localStorage.getItem('tbbuilder:kis:live-session') ?? '{}');
+      const creds   = JSON.parse(localStorage.getItem('tbbuilder:kis:virtual') ?? '{}');
+      const auto    = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}');
+      const token   = session.token;
+      const accountNo = creds.accountNo;
+      const appKey    = creds.appKey;
+      const appSecret = creds.appSecret;
+      if (!token || !accountNo || !appKey) return;
+      const cano       = accountNo.slice(0, 8);
+      const acntPrdtCd = accountNo.length > 8 ? accountNo.slice(8) : '01';
+      const serverType = auto.serverType ?? 'virtual';
+      setKisBalanceLoading(true);
+      const res = await fetch(
+        `/api/kis/balance?cano=${encodeURIComponent(cano)}&acntPrdtCd=${encodeURIComponent(acntPrdtCd)}`,
+        { headers: { 'x-kis-token': token, 'x-kis-appkey': appKey, 'x-kis-appsecret': appSecret, 'x-kis-server': serverType } },
+      );
+      const data = await res.json();
+      if (data.output2) {
+        setKisBalance((data.output2?.[0] ?? data.output2) as KisBalanceSummary);
+        setKisHoldings((data.output1 ?? []) as KisHolding[]);
+      }
+    } catch { /* ignore */ }
+    setKisBalanceLoading(false);
+  }, []);
+
   const fetchIndices = useCallback(async () => {
     try {
       const [r1, r2] = await Promise.allSettled([
@@ -187,11 +242,12 @@ export default function DashboardPanel() {
 
   useEffect(() => { readLocalState(); }, [readLocalState]);
   useEffect(() => {
-    fetchPrice(primarySymbol); fetchIndices();
+    fetchPrice(primarySymbol); fetchIndices(); fetchKisBalance();
     const iv1 = setInterval(() => fetchPrice(primarySymbol), 30_000);
     const iv2 = setInterval(fetchIndices, 60_000);
-    return () => { clearInterval(iv1); clearInterval(iv2); };
-  }, [primarySymbol, fetchPrice, fetchIndices]);
+    const iv3 = setInterval(fetchKisBalance, 60_000);
+    return () => { clearInterval(iv1); clearInterval(iv2); clearInterval(iv3); };
+  }, [primarySymbol, fetchPrice, fetchIndices, fetchKisBalance]);
   useEffect(() => {
     const fn = (e: StorageEvent) => { if (e.key?.startsWith('tbbuilder:')) readLocalState(); };
     window.addEventListener('storage', fn);
@@ -202,7 +258,7 @@ export default function DashboardPanel() {
     return () => clearInterval(iv);
   }, [readLocalState]);
 
-  const handleRefresh = () => { readLocalState(); fetchPrice(primarySymbol); fetchIndices(); };
+  const handleRefresh = () => { readLocalState(); fetchPrice(primarySymbol); fetchIndices(); fetchKisBalance(); };
 
   // ── 손익 계산
   const investedAmt   = primaryPosition ? Math.round(primaryPosition.avgPrice * primaryPosition.qty) : 0;
@@ -478,6 +534,87 @@ export default function DashboardPanel() {
           </div>
         </div>
       </div>
+
+      {/* ── KIS 모의투자 계좌 ─────────────────────────────────────────────── */}
+      {kisBalance && (
+        <div className="bg-white border border-[#e5e5e5] rounded-xl overflow-hidden">
+          {/* 헤더 */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#f5f5f5]">
+            <div className="flex items-center gap-1.5">
+              <Wallet className="h-3 w-3 text-[#2563eb]" />
+              <span className="text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3]">KIS 모의투자 계좌</span>
+            </div>
+            <button onClick={() => fetchKisBalance()} disabled={kisBalanceLoading}
+              className="p-1 rounded text-[#a3a3a3] hover:text-[#171717] transition cursor-pointer">
+              <RefreshCw className={cn('h-3 w-3', kisBalanceLoading && 'animate-spin')} />
+            </button>
+          </div>
+
+          {/* 잔고 3×2 그리드 */}
+          <div className="grid grid-cols-3 divide-x divide-[#f5f5f5] border-b border-[#f5f5f5]">
+            {([
+              ['예수금', parseInt(kisBalance.dnca_tot_amt ?? '0')],
+              ['주문가능', parseInt(kisBalance.ord_psbl_cash ?? '0')],
+              ['총평가금액', parseInt(kisBalance.tot_evlu_amt ?? '0')],
+            ] as [string, number][]).map(([label, val]) => (
+              <div key={label} className="px-3 py-2.5">
+                <p className="text-[9px] text-[#a3a3a3] mb-0.5">{label}</p>
+                <p className="text-xs font-bold font-mono text-[#171717]">{val.toLocaleString()}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 divide-x divide-[#f5f5f5]">
+            {(() => {
+              const pnl = parseInt(kisBalance.evlu_pfls_smtl_amt ?? '0');
+              const pnlCls = pnl > 0 ? 'text-red-600' : pnl < 0 ? 'text-blue-600' : 'text-[#171717]';
+              return ([
+                ['유가평가액', parseInt(kisBalance.scts_evlu_amt ?? '0'), 'text-[#171717]'],
+                ['금일매수액', parseInt(kisBalance.thdt_buy_amt ?? '0'), 'text-red-600'],
+                ['평가손익', pnl, pnlCls],
+              ] as [string, number, string][]).map(([label, val, cls]) => (
+                <div key={label} className="px-3 py-2.5">
+                  <p className="text-[9px] text-[#a3a3a3] mb-0.5">{label}</p>
+                  <p className={cn('text-xs font-bold font-mono', cls)}>
+                    {label === '평가손익' && val > 0 ? '+' : ''}{val.toLocaleString()}
+                  </p>
+                </div>
+              ));
+            })()}
+          </div>
+
+          {/* 보유종목 */}
+          {kisHoldings.filter(h => parseInt(h.hldg_qty) > 0).length > 0 && (
+            <div className="border-t border-[#f5f5f5]">
+              <p className="px-4 pt-2.5 pb-1 text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3]">보유종목</p>
+              <div className="divide-y divide-[#f7f7f7]">
+                {kisHoldings.filter(h => parseInt(h.hldg_qty) > 0).map((h, i) => {
+                  const pnl  = parseInt(h.evlu_pfls_amt ?? '0');
+                  const pnlRt = parseFloat(h.evlu_pfls_rt ?? '0');
+                  const isGain = pnl >= 0;
+                  return (
+                    <div key={i} className="px-4 py-2.5 flex items-center justify-between hover:bg-[#fafafa] transition">
+                      <div>
+                        <p className="text-xs font-bold text-[#171717]">{h.prdt_name}</p>
+                        <p className="text-[9px] text-[#a3a3a3] font-mono mt-0.5">
+                          {parseInt(h.hldg_qty).toLocaleString()}주 · 평단 {parseFloat(h.pchs_avg_pric).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-bold font-mono text-[#171717]">
+                          {parseInt(h.prpr).toLocaleString()}원
+                        </p>
+                        <p className={cn('text-[9px] font-mono font-bold', isGain ? 'text-red-600' : 'text-blue-600')}>
+                          {isGain ? '+' : ''}{pnl.toLocaleString()}원 ({pnlRt >= 0 ? '+' : ''}{pnlRt.toFixed(2)}%)
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 거래 내역 타임라인 ─────────────────────────────────────────────── */}
       {filteredTrades.length > 0 && (
