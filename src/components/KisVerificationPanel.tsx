@@ -683,9 +683,10 @@ export default function KisVerificationPanel() {
         { headers: { ...kisHeaders(), 'x-kis-token': tok } },
       );
       const data = await res.json();
+      console.log('[balance] output2[0] keys:', JSON.stringify(data.output2?.[0] ?? data.output2, null, 2));
       if (data.output1) {
         setHoldings(data.output1 as HoldingItem[]);
-        setBalanceSummary(data.output2 as BalanceSummary);
+        setBalanceSummary((data.output2?.[0] ?? data.output2) as BalanceSummary);
       } else {
         console.warn('[balance]', data.msg1 ?? data);
       }
