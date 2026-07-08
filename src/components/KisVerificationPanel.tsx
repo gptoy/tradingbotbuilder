@@ -24,8 +24,7 @@ const AUTO_TRADE_CONFIG: BotConfig = {
   stopLoss: 5, takeProfit: 10, tradeSize: 10,
   timeframe: '1h', marketType: 'stock', symbol: '000660',
 };
-// AUTO_SYMBOL은 KOSPI_TOP10[0].code 로 대체
-const KOSPI_TOP10: { code: string; name: string }[] = [
+const KOSPI_TOP20: { code: string; name: string }[] = [
   { code: '005930', name: '삼성전자' },
   { code: '000660', name: 'SK하이닉스' },
   { code: '207940', name: '삼성바이오' },
@@ -36,6 +35,16 @@ const KOSPI_TOP10: { code: string; name: string }[] = [
   { code: '068270', name: '셀트리온' },
   { code: '105560', name: 'KB금융' },
   { code: '055550', name: '신한지주' },
+  { code: '035720', name: '카카오' },
+  { code: '003550', name: 'LG' },
+  { code: '034730', name: 'SK' },
+  { code: '028260', name: '삼성물산' },
+  { code: '012330', name: '현대모비스' },
+  { code: '066570', name: 'LG전자' },
+  { code: '032830', name: '삼성생명' },
+  { code: '086790', name: '하나금융' },
+  { code: '316140', name: '우리금융' },
+  { code: '096770', name: 'SK이노베이션' },
 ];
 
 interface SymbolWatchState {
@@ -211,7 +220,7 @@ export default function KisVerificationPanel() {
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // ── 자동매매 (코스피 TOP 10) ──────────────────────────────────────────────
+  // ── 자동매매 (코스피 TOP 20 멀티 종목) ────────────────────────────────────
   const [autoEnabled, setAutoEnabled]             = useState(false);
   const [autoWatchMap, setAutoWatchMap]           = useState<Record<string, SymbolWatchState>>({});
   const [autoOrderQty, setAutoOrderQty]           = useState('1');
@@ -469,9 +478,9 @@ export default function KisVerificationPanel() {
               setTokenExpiry(resolvedExp);
               setConnStatus('connected');
 
-              // 코스피 TOP 10 캔들 순차 로드
-              addAutoLog(`[자동 복구] 코스피 TOP 10 캔들 로드 중… (${KOSPI_TOP10.length}개 종목)`, 'info');
-              for (const { code, name } of KOSPI_TOP10) {
+              // 코스피 TOP 20 캔들 순차 로드
+              addAutoLog(`[자동 복구] 코스피 TOP 20 캔들 로드 중… (${KOSPI_TOP20.length}개 종목)`, 'info');
+              for (const { code, name } of KOSPI_TOP20) {
                 try {
                   const cRes = await fetch(`/api/stock/${code}/candles?count=200`);
                   if (cRes.ok) {
@@ -491,7 +500,7 @@ export default function KisVerificationPanel() {
 
               autoEnabledRef.current = true; setAutoEnabled(true);
               autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
-              addAutoLog(`[자동 복구] 새로고침 후 KIS 자동매매 재개 (${srv === 'real' ? '실전' : '모의'} · 코스피 TOP 10)`, 'warning');
+              addAutoLog(`[자동 복구] 새로고침 후 KIS 자동매매 재개 (${srv === 'real' ? '실전' : '모의'} · 코스피 TOP 20)`, 'warning');
             } catch (e) {
               addAutoLog(`자동 복구 실패 (네트워크) — 수동 재시작 필요`, 'error');
               try { localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...autoKis, active: false })); } catch {}
@@ -514,7 +523,7 @@ export default function KisVerificationPanel() {
           const iv  = autoToss.interval ?? 30;
           // 구 포맷(position) → 신 포맷(positions 맵) 하위 호환
           const savedPositions: Record<string, { qty: number; avgPrice: number } | null> =
-            autoToss.positions ?? (autoToss.position ? { [autoToss.symbol ?? KOSPI_TOP10[0].code]: autoToss.position } : {});
+            autoToss.positions ?? (autoToss.position ? { [autoToss.symbol ?? KOSPI_TOP20[0].code]: autoToss.position } : {});
           setTossAutoOrderQty(qty);          tossAutoOrderQtyRef.current = qty;
           setTossAutoCheckInterval(iv);
           tossAutoPositionsMapRef.current = savedPositions;
@@ -562,8 +571,8 @@ export default function KisVerificationPanel() {
             }
             setTossConnStatus('connected');
 
-            addTossAutoLog(`[자동 복구] 코스피 TOP 10 캔들 로드 중… (${KOSPI_TOP10.length}개 종목)`, 'info');
-            for (const { code, name } of KOSPI_TOP10) {
+            addTossAutoLog(`[자동 복구] 코스피 TOP 20 캔들 로드 중… (${KOSPI_TOP20.length}개 종목)`, 'info');
+            for (const { code, name } of KOSPI_TOP20) {
               try {
                 const cRes = await fetch(`/api/stock/${code}/candles?count=200`);
                 if (cRes.ok) {
@@ -582,7 +591,7 @@ export default function KisVerificationPanel() {
             }
             tossAutoEnabledRef.current = true; setTossAutoEnabled(true);
             tossAutoIntervalRef.current = setInterval(runTossAutoCheck, iv * 1000);
-            addTossAutoLog(`[자동 복구] 새로고침 후 Toss 자동매매 재개 (코스피 TOP 10)`, 'warning');
+            addTossAutoLog(`[자동 복구] 새로고침 후 Toss 자동매매 재개 (코스피 TOP 20)`, 'warning');
           } catch (e) {
             addTossAutoLog(`자동 복구 실패 (네트워크: ${e instanceof Error ? e.message : '오류'}) — 수동 재시작 필요`, 'error');
             try { localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({ ...autoToss, active: false })); } catch {}
@@ -591,7 +600,7 @@ export default function KisVerificationPanel() {
           if (autoToss.qty)      { setTossAutoOrderQty(autoToss.qty);    tossAutoOrderQtyRef.current  = autoToss.qty; }
           if (autoToss.interval) setTossAutoCheckInterval(autoToss.interval);
           const savedPositions: Record<string, { qty: number; avgPrice: number } | null> =
-            autoToss.positions ?? (autoToss.position ? { [autoToss.symbol ?? KOSPI_TOP10[0].code]: autoToss.position } : {});
+            autoToss.positions ?? (autoToss.position ? { [autoToss.symbol ?? KOSPI_TOP20[0].code]: autoToss.position } : {});
           tossAutoPositionsMapRef.current = savedPositions;
         }
 
@@ -1000,7 +1009,7 @@ export default function KisVerificationPanel() {
 
     const updatedMap: Record<string, SymbolWatchState> = { ...autoWatchMapRef.current };
 
-    for (const { code, name } of KOSPI_TOP10) {
+    for (const { code, name } of KOSPI_TOP20) {
       try {
         // 0-b. 새 거래일 캔들 갱신 (종목별)
         if (!autoCandlesMapRef.current[code] || autoLastCandleDayMapRef.current[code] !== todayKst) {
@@ -1176,7 +1185,7 @@ export default function KisVerificationPanel() {
 
   const startAutoTrade = useCallback(async () => {
     if (!canoRef.current) { addAutoLog('계좌번호를 먼저 입력하고 KIS에 연결하세요.', 'error'); return; }
-    addAutoLog(`코스피 TOP 10 캔들 로드 중… (${KOSPI_TOP10.length}개 종목)`, 'info');
+    addAutoLog(`코스피 TOP 20 캔들 로드 중… (${KOSPI_TOP20.length}개 종목)`, 'info');
     try {
       // 잔고 사전 확인
       try {
@@ -1199,7 +1208,7 @@ export default function KisVerificationPanel() {
       }
 
       setAutoLoadingCandles(true);
-      for (const { code, name } of KOSPI_TOP10) {
+      for (const { code, name } of KOSPI_TOP20) {
         try {
           await loadAutoCandles(code);
           addAutoLog(`  ✓ ${name}(${code}) 캔들 로드`, 'info');
@@ -1214,7 +1223,7 @@ export default function KisVerificationPanel() {
       // localStorage에 활성 상태 저장 (새로고침 복구용)
       try {
         localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({
-          active: true, symbols: KOSPI_TOP10.map(s => s.code), qty: autoOrderQtyRef.current,
+          active: true, symbols: KOSPI_TOP20.map(s => s.code), qty: autoOrderQtyRef.current,
           interval: autoCheckInterval, positions: autoPositionsMapRef.current,
           serverType: kisServerTypeRef.current,
         }));
@@ -1412,7 +1421,7 @@ export default function KisVerificationPanel() {
 
       const updatedMap: Record<string, SymbolWatchState> = { ...tossAutoWatchMapRef.current };
 
-      for (const { code, name } of KOSPI_TOP10) {
+      for (const { code, name } of KOSPI_TOP20) {
         try {
           // 새 거래일 캔들 갱신
           if (!tossAutoCandlesMapRef.current[code] || tossAutoLastCandleDayMapRef.current[code] !== todayKst) {
@@ -1570,10 +1579,10 @@ export default function KisVerificationPanel() {
 
   const startTossAutoTrade = useCallback(async () => {
     if (!tossTokenRef.current) { addTossAutoLog('토스증권에 먼저 연결하세요.', 'error'); return; }
-    addTossAutoLog(`코스피 TOP 10 캔들 로드 중… (${KOSPI_TOP10.length}개 종목)`, 'info');
+    addTossAutoLog(`코스피 TOP 20 캔들 로드 중… (${KOSPI_TOP20.length}개 종목)`, 'info');
     setTossAutoLoadingCandles(true);
     try {
-      for (const { code, name } of KOSPI_TOP10) {
+      for (const { code, name } of KOSPI_TOP20) {
         try {
           await loadTossAutoCandles(code);
           addTossAutoLog(`  ✓ ${name}(${code}) 캔들 로드`, 'info');
@@ -1586,7 +1595,7 @@ export default function KisVerificationPanel() {
       setTossAutoEnabled(true);
       try {
         localStorage.setItem('tbbuilder:auto:toss', JSON.stringify({
-          active: true, symbols: KOSPI_TOP10.map(s => s.code),
+          active: true, symbols: KOSPI_TOP20.map(s => s.code),
           qty: tossAutoOrderQtyRef.current, interval: tossAutoCheckInterval,
           positions: tossAutoPositionsMapRef.current,
         }));
@@ -2829,11 +2838,11 @@ if __name__ == "__main__":
   );
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 자동매매 UI (코스피 TOP 10 멀티 종목)
+  // 자동매매 UI (코스피 TOP 20 멀티 종목)
   // ═══════════════════════════════════════════════════════════════════════════
   const renderAutoTrade = () => {
     // ─── 파생 데이터 계산 ────────────────────────────────────────────
-    const holdings = KOSPI_TOP10
+    const holdings = KOSPI_TOP20
       .map(({ code, name }) => {
         const w = autoWatchMap[code];
         if (!w?.position) return null;
@@ -2851,8 +2860,8 @@ if __name__ == "__main__":
       .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
       .slice(0, 6);
 
-    const buyAlerts  = KOSPI_TOP10.filter(({ code }) => autoWatchMap[code]?.signal === '매수후보');
-    const sellAlerts = KOSPI_TOP10.filter(({ code }) => autoWatchMap[code]?.signal === '위험');
+    const buyAlerts  = KOSPI_TOP20.filter(({ code }) => autoWatchMap[code]?.signal === '매수후보');
+    const sellAlerts = KOSPI_TOP20.filter(({ code }) => autoWatchMap[code]?.signal === '위험');
 
     const filteredLogs = autoLogFilter === 'trade'
       ? autoLogs.filter(l => ['buy','sell','success'].includes(l.type))
@@ -2879,7 +2888,7 @@ if __name__ == "__main__":
             ? <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             : <span className="h-2 w-2 rounded-full bg-slate-600 shrink-0" />}
           <span className={`font-bold ${autoEnabled ? 'text-emerald-200' : 'text-slate-400'}`}>
-            {autoEnabled ? '코스피 TOP 10 감시 중' : '대기 중'}
+            {autoEnabled ? '코스피 TOP 20 감시 중' : '대기 중'}
           </span>
           {autoEnabled && <span className="text-slate-400 font-mono">· {autoCheckInterval}s 주기</span>}
           {autoLastCheckTime && <span className="text-slate-500 font-mono text-[10px]">· 마지막: {autoLastCheckTime}</span>}
@@ -2988,7 +2997,7 @@ if __name__ == "__main__":
         {/* ── 감시 종목 테이블 ── */}
         <div className="rounded-xl border border-slate-700 overflow-hidden">
           <div className="bg-slate-900 px-3 py-2 flex items-center justify-between border-b border-slate-700">
-            <span className="text-[10px] font-bold text-slate-300">코스피 TOP 10 감시 목록</span>
+            <span className="text-[10px] font-bold text-slate-300">코스피 TOP 20 감시 목록</span>
             <span className="text-[9px] text-slate-500">Ross Cameron MACD+RSI · 6점+ 매수</span>
           </div>
           <div className="overflow-x-auto">
@@ -3005,7 +3014,7 @@ if __name__ == "__main__":
                 </tr>
               </thead>
               <tbody>
-                {KOSPI_TOP10.map(({ code, name }) => {
+                {KOSPI_TOP20.map(({ code, name }) => {
                   const w      = autoWatchMap[code];
                   const pos    = w?.position ?? null;
                   const signal = w?.signal ?? '관망';
@@ -3151,7 +3160,7 @@ if __name__ == "__main__":
           >
             {autoLoadingCandles
               ? <><RefreshCw className="h-4 w-4 animate-spin" />캔들 로드 중…</>
-              : <><Bot className="h-4 w-4" />코스피 TOP 10 자동매매 시작</>}
+              : <><Bot className="h-4 w-4" />코스피 TOP 20 자동매매 시작</>}
           </button>
         ) : (
           <button
@@ -3209,7 +3218,7 @@ if __name__ == "__main__":
 
   const renderTossAutoTrade = () => {
     // ─── 파생 데이터 계산 ────────────────────────────────────────────
-    const tossHoldings = KOSPI_TOP10
+    const tossHoldings = KOSPI_TOP20
       .map(({ code, name }) => {
         const w = tossAutoWatchMap[code];
         if (!w?.position) return null;
@@ -3227,8 +3236,8 @@ if __name__ == "__main__":
       .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
       .slice(0, 6);
 
-    const tossBuyAlerts  = KOSPI_TOP10.filter(({ code }) => tossAutoWatchMap[code]?.signal === '매수후보');
-    const tossSellAlerts = KOSPI_TOP10.filter(({ code }) => tossAutoWatchMap[code]?.signal === '위험');
+    const tossBuyAlerts  = KOSPI_TOP20.filter(({ code }) => tossAutoWatchMap[code]?.signal === '매수후보');
+    const tossSellAlerts = KOSPI_TOP20.filter(({ code }) => tossAutoWatchMap[code]?.signal === '위험');
 
     const tossFilteredLogs = tossAutoLogFilter === 'trade'
       ? tossAutoLogs.filter(l => ['buy','sell','success'].includes(l.type))
@@ -3255,7 +3264,7 @@ if __name__ == "__main__":
             ? <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
             : <span className="h-2 w-2 rounded-full bg-slate-600 shrink-0" />}
           <span className={`font-bold ${tossAutoEnabled ? 'text-blue-200' : 'text-slate-400'}`}>
-            {tossAutoEnabled ? '코스피 TOP 10 감시 중' : '대기 중'}
+            {tossAutoEnabled ? '코스피 TOP 20 감시 중' : '대기 중'}
           </span>
           {tossAutoEnabled && <span className="text-slate-400 font-mono">· {tossAutoCheckInterval}s 주기</span>}
           {tossAutoLastCheckTime && <span className="text-slate-500 font-mono text-[10px]">· 마지막: {tossAutoLastCheckTime}</span>}
@@ -3362,7 +3371,7 @@ if __name__ == "__main__":
         {/* ── 감시 종목 테이블 ── */}
         <div className="rounded-xl overflow-hidden border border-slate-700">
           <div className="bg-slate-900 px-3 py-2 flex items-center justify-between border-b border-slate-700">
-            <span className="text-[10px] font-bold text-slate-300">코스피 TOP 10 감시 목록</span>
+            <span className="text-[10px] font-bold text-slate-300">코스피 TOP 20 감시 목록</span>
             <span className="text-[9px] text-slate-500">Ross Cameron MACD+RSI · 6점+ 매수</span>
           </div>
           <table className="w-full text-[10px]">
@@ -3378,7 +3387,7 @@ if __name__ == "__main__":
               </tr>
             </thead>
             <tbody>
-              {KOSPI_TOP10.map(({ code, name }) => {
+              {KOSPI_TOP20.map(({ code, name }) => {
                 const w      = tossAutoWatchMap[code];
                 const pos    = w?.position ?? null;
                 const signal = w?.signal ?? '관망';
@@ -3483,7 +3492,7 @@ if __name__ == "__main__":
             className="w-full py-2.5 rounded-xl text-sm font-bold bg-blue-700 hover:bg-blue-600 text-white transition flex items-center justify-center gap-2 disabled:opacity-40 cursor-pointer">
             {tossAutoLoadingCandles
               ? <><RefreshCw className="h-4 w-4 animate-spin" />캔들 로드 중…</>
-              : <><Bot className="h-4 w-4" />자동매매 시작 (토스증권 · 코스피 TOP 10)</>}
+              : <><Bot className="h-4 w-4" />자동매매 시작 (토스증권 · 코스피 TOP 20)</>}
           </button>
         ) : (
           <button onClick={stopTossAutoTrade}
@@ -4246,7 +4255,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           {autoEnabled && (
             <span className="flex items-center gap-1">
               <Bot className="h-3.5 w-3.5" />
-              KIS — 코스피 TOP 10 · {autoCheckInterval}s
+              KIS — 코스피 TOP 20 · {autoCheckInterval}s
               {(Object.values(autoWatchMap) as SymbolWatchState[]).some(w => w.position) && (
                 <span className="ml-1 text-emerald-400">
                   ({(Object.values(autoWatchMap) as SymbolWatchState[]).filter(w => w.position).length}종목 보유)
@@ -4257,7 +4266,7 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           {tossAutoEnabled && (
             <span className="flex items-center gap-1">
               <Bot className="h-3.5 w-3.5" />
-              Toss — 코스피 TOP 10 · {tossAutoCheckInterval}s
+              Toss — 코스피 TOP 20 · {tossAutoCheckInterval}s
               {(Object.values(tossAutoWatchMap) as SymbolWatchState[]).some(w => !!w?.position) && (
                 <span className="ml-1 text-emerald-400">
                   ({(Object.values(tossAutoWatchMap) as SymbolWatchState[]).filter(w => !!w?.position).length}종목 보유)
