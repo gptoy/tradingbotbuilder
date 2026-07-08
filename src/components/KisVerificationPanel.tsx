@@ -1095,20 +1095,25 @@ export default function KisVerificationPanel() {
     if (!canoRef.current) { addAutoLog('계좌번호를 먼저 입력하고 KIS에 연결하세요.', 'error'); return; }
     addAutoLog(`${autoSymbolRef.current} 일봉 200개 로드 중…`, 'info');
     try {
-      // 잔고 사전 확인
+      // 잔고 사전 확인 (계좌번호 쿼리파라미터 필수)
       try {
-        const balRes = await fetch('/api/kis/balance', {
-          headers: kisHeadersFromRef() as Record<string, string>,
-        });
+        const balRes = await fetch(
+          `/api/kis/balance?cano=${encodeURIComponent(canoRef.current)}&acntPrdtCd=${encodeURIComponent(acntPrdtCdRef.current)}`,
+          { headers: kisHeadersFromRef() as Record<string, string> },
+        );
         const balData = await balRes.json();
         const availCash = parseInt(balData.output2?.[0]?.dnca_tot_amt ?? '0');
-        if (availCash === 0) {
-          addAutoLog('⚠ 모의투자 잔고 0원 — 매수 신호 발생 시 주문이 실패할 수 있습니다.', 'warning');
+        const nass      = parseInt(balData.output2?.[0]?.nass_amt ?? '0');
+        if (availCash === 0 && nass === 0) {
+          addAutoLog('⚠ 주문가능금액 0원 — 매수 신호 발생 시 주문이 실패할 수 있습니다.', 'warning');
           addAutoLog('  → KIS Developers(apiportal.koreainvestment.com) 모의투자 계좌에서 가상 자금을 확인하세요.', 'warning');
+          if (balData.msg1) addAutoLog(`  KIS 응답: ${balData.msg1}`, 'warning');
         } else {
-          addAutoLog(`💰 주문가능금액: ${availCash.toLocaleString()}원`, 'info');
+          addAutoLog(`💰 예수금: ${availCash.toLocaleString()}원 | 순자산: ${nass.toLocaleString()}원`, 'info');
         }
-      } catch { /* 잔고 조회 실패는 무시하고 계속 */ }
+      } catch (e) {
+        addAutoLog(`잔고 조회 실패: ${e instanceof Error ? e.message : '오류'} — 자동매매는 계속 진행합니다.`, 'warning');
+      }
 
       await loadAutoCandles();
       addAutoLog('캔들 로드 완료. 자동매매 시작!', 'success');
