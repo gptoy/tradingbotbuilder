@@ -24,7 +24,28 @@ const AUTO_TRADE_CONFIG: BotConfig = {
   stopLoss: 5, takeProfit: 10, tradeSize: 10,
   timeframe: '1h', marketType: 'stock', symbol: '000660',
 };
-const AUTO_SYMBOL = '000660'; // SK 하이닉스
+// AUTO_SYMBOL은 KOSPI_TOP10[0].code 로 대체
+const KOSPI_TOP10: { code: string; name: string }[] = [
+  { code: '005930', name: '삼성전자' },
+  { code: '000660', name: 'SK하이닉스' },
+  { code: '207940', name: '삼성바이오' },
+  { code: '005380', name: '현대차' },
+  { code: '035420', name: 'NAVER' },
+  { code: '000270', name: '기아' },
+  { code: '051910', name: 'LG화학' },
+  { code: '068270', name: '셀트리온' },
+  { code: '105560', name: 'KB금융' },
+  { code: '055550', name: '신한지주' },
+];
+
+interface SymbolWatchState {
+  signal: SignalClass;
+  price: number;
+  position: { qty: number; avgPrice: number } | null;
+  score: number;
+  rsi: number;
+  macd: number;
+}
 
 interface TossHoldingItem {
   symbol: string;
@@ -190,18 +211,12 @@ export default function KisVerificationPanel() {
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // ── 자동매매 (SK 하이닉스 000660) ──────────────────────────────────────────
+  // ── 자동매매 (코스피 TOP 10) ──────────────────────────────────────────────
   const [autoEnabled, setAutoEnabled]             = useState(false);
-  const [autoSymbol, setAutoSymbol]               = useState('000660'); // 기본: SK 하이닉스
-  const [autoSymbolName, setAutoSymbolName]       = useState('SK 하이닉스');
-  const [autoPosition, setAutoPosition]           = useState<{ qty: number; avgPrice: number } | null>(null);
-  const [autoSignal, setAutoSignal]               = useState<SignalClass>('관망');
-  const [autoLastPrice, setAutoLastPrice]         = useState(0);
+  const [autoWatchMap, setAutoWatchMap]           = useState<Record<string, SymbolWatchState>>({});
   const [autoOrderQty, setAutoOrderQty]           = useState('1');
   const [autoLoadingCandles, setAutoLoadingCandles] = useState(false);
-  const [autoIndicators, setAutoIndicators]       = useState<{ rsi: number; macd: number; macdSig: number; macdHist: number; strength: number; trendState: string } | null>(null);
   const [autoLogs, setAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning'; msg: string }[]>([]);
-  const [autoPlacing, setAutoPlacing]             = useState(false);
   const [autoCheckInterval, setAutoCheckInterval] = useState(30); // seconds
 
   // ── 장 시간 자동 스케줄러 ──────────────────────────────────────────────────
@@ -211,12 +226,14 @@ export default function KisVerificationPanel() {
   const schedulerIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // refs — 인터벌 콜백에서 최신 값에 접근 (stale closure 방지)
-  const autoEnabledRef    = useRef(false);
-  const autoSymbolRef     = useRef('000660');
-  const autoCandlesRef    = useRef<MarketBar[]>([]);
-  const autoPositionRef   = useRef<{ qty: number; avgPrice: number } | null>(null);
-  const autoOrderQtyRef   = useRef('1');
-  const autoIntervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoEnabledRef       = useRef(false);
+  const autoCandlesMapRef    = useRef<Record<string, MarketBar[]>>({});
+  const autoPositionsMapRef  = useRef<Record<string, { qty: number; avgPrice: number } | null>>({});
+  const autoLastCandleDayMapRef = useRef<Record<string, string>>({});
+  const autoPlacingMapRef    = useRef<Record<string, boolean>>({});
+  const autoWatchMapRef      = useRef<Record<string, SymbolWatchState>>({});
+  const autoOrderQtyRef      = useRef('1');
+  const autoIntervalRef      = useRef<ReturnType<typeof setInterval> | null>(null);
   const kisTokenRef       = useRef('');
   const kisServerTypeRef  = useRef<'virtual' | 'real'>('virtual');
   const kisAppKeyRef      = useRef('');
@@ -281,12 +298,10 @@ export default function KisVerificationPanel() {
   const tossTokenExpiryRef         = useRef<Date | null>(null);
   const tossClientIdRef            = useRef('');
   const tossClientSecretRef        = useRef('');
-  const autoPlacingRef             = useRef(false);  // 중복 주문 방지
   const tossAutoPlacingRef         = useRef(false);
   const autoConsecErrorsRef        = useRef(0);      // 연속 오류 카운터
   const tossAutoConsecErrorsRef    = useRef(0);
   const kiwoomAutoConsecErrorsRef  = useRef(0);
-  const autoLastCandleDayRef       = useRef('');     // YYYYMMDD — 캔들 갱신일 추적
   const tossAutoLastCandleDayRef   = useRef('');
   const kiwoomAutoLastCandleDayRef = useRef('');
 
@@ -389,17 +404,19 @@ export default function KisVerificationPanel() {
           const creds  = srv === 'real' ? kisReal : kisVirtual;
 
           if (creds.appKey && creds.appSecret && creds.accountNo) {
-            // 설정 복구
-            const sym = autoKis.symbol ?? '000660';
-            const qty = autoKis.qty    ?? '1';
-            const iv  = autoKis.interval ?? 30;
-            const pos = autoKis.position ?? null;
+            // 설정 복구 (멀티 종목)
+            const qty  = autoKis.qty      ?? '1';
+            const iv   = autoKis.interval ?? 30;
+            // 구형(단일 종목) positions 호환 → 멀티맵으로 변환
+            const savedPositions: Record<string, { qty: number; avgPrice: number } | null> =
+              autoKis.positions ?? (autoKis.position && autoKis.symbol
+                ? { [autoKis.symbol]: autoKis.position }
+                : {});
             setKisServerType(srv);
             kisServerTypeRef.current = srv;
-            setAutoSymbol(sym);            autoSymbolRef.current     = sym;
-            setAutoOrderQty(qty);          autoOrderQtyRef.current   = qty;
+            setAutoOrderQty(qty);          autoOrderQtyRef.current  = qty;
             setAutoCheckInterval(iv);
-            if (pos) { setAutoPosition(pos); autoPositionRef.current = pos; }
+            autoPositionsMapRef.current = savedPositions;
 
             // 직접 refs 설정 (state 업데이트는 비동기이므로)
             kisAppKeyRef.current    = creds.appKey;
@@ -453,26 +470,29 @@ export default function KisVerificationPanel() {
               setTokenExpiry(resolvedExp);
               setConnStatus('connected');
 
-              if (true) {  // 항상 실행 (중첩 제거용 블록)
-                // 캔들 로드
-                const cRes = await fetch(`/api/stock/${sym}/candles?count=200`);
-                if (cRes.ok) {
-                  const candles: any[] = await cRes.json();
-                  if (Array.isArray(candles) && candles.length > 0) {
-                    const bars: MarketBar[] = candles.map((c: any) => ({
-                      time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
-                      timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
-                      open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
-                    }));
-                    autoCandlesRef.current = computeIndicators(bars, AUTO_TRADE_CONFIG);
-                    autoLastCandleDayRef.current = candles[candles.length - 1].date;
+              // 코스피 TOP 10 캔들 순차 로드
+              addAutoLog(`[자동 복구] 코스피 TOP 10 캔들 로드 중… (${KOSPI_TOP10.length}개 종목)`, 'info');
+              for (const { code, name } of KOSPI_TOP10) {
+                try {
+                  const cRes = await fetch(`/api/stock/${code}/candles?count=200`);
+                  if (cRes.ok) {
+                    const candles: any[] = await cRes.json();
+                    if (Array.isArray(candles) && candles.length > 0) {
+                      const bars: MarketBar[] = candles.map((c: any) => ({
+                        time: `${c.date.slice(4,6)}/${c.date.slice(6,8)}`,
+                        timestamp: new Date(`${c.date.slice(0,4)}-${c.date.slice(4,6)}-${c.date.slice(6,8)}T00:00:00+09:00`).getTime(),
+                        open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+                      }));
+                      autoCandlesMapRef.current[code] = computeIndicators(bars, AUTO_TRADE_CONFIG);
+                      autoLastCandleDayMapRef.current[code] = candles[candles.length - 1].date;
+                    }
                   }
-                }
-
-                autoEnabledRef.current = true; setAutoEnabled(true);
-                autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
-                addAutoLog(`[자동 복구] 새로고침 후 KIS 자동매매 재개 (${srv === 'real' ? '실전' : '모의'} · ${sym})`, 'warning');
+                } catch { addAutoLog(`  ✗ ${name}(${code}) 로드 실패`, 'warning'); }
               }
+
+              autoEnabledRef.current = true; setAutoEnabled(true);
+              autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
+              addAutoLog(`[자동 복구] 새로고침 후 KIS 자동매매 재개 (${srv === 'real' ? '실전' : '모의'} · 코스피 TOP 10)`, 'warning');
             } catch (e) {
               addAutoLog(`자동 복구 실패 (네트워크) — 수동 재시작 필요`, 'error');
               try { localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...autoKis, active: false })); } catch {}
@@ -480,10 +500,13 @@ export default function KisVerificationPanel() {
           }
         } else if (autoKis) {
           // 설정값만 복원 (활성은 아님)
-          if (autoKis.symbol)   { setAutoSymbol(autoKis.symbol);   autoSymbolRef.current   = autoKis.symbol; }
-          if (autoKis.qty)      { setAutoOrderQty(autoKis.qty);    autoOrderQtyRef.current  = autoKis.qty; }
+          if (autoKis.qty)      { setAutoOrderQty(autoKis.qty);    autoOrderQtyRef.current = autoKis.qty; }
           if (autoKis.interval) setAutoCheckInterval(autoKis.interval);
-          if (autoKis.position) { setAutoPosition(autoKis.position); autoPositionRef.current = autoKis.position; }
+          const savedPositions: Record<string, { qty: number; avgPrice: number } | null> =
+            autoKis.positions ?? (autoKis.position && autoKis.symbol
+              ? { [autoKis.symbol]: autoKis.position }
+              : {});
+          autoPositionsMapRef.current = savedPositions;
         }
 
         // 4. Toss 자동매매 자동 복구
@@ -619,7 +642,6 @@ export default function KisVerificationPanel() {
   useEffect(() => { kisAppKeyRef.current = kisAppKey; kisAppSecretRef.current = kisAppSecret; }, [kisAppKey, kisAppSecret]);
   useEffect(() => { canoRef.current = cano; acntPrdtCdRef.current = acntPrdtCd; }, [cano, acntPrdtCd]);
   useEffect(() => { autoOrderQtyRef.current = autoOrderQty; }, [autoOrderQty]);
-  useEffect(() => { autoSymbolRef.current = autoSymbol; }, [autoSymbol]);
 
   // Toss auto-trade ref sync
   useEffect(() => { tossTokenRef.current = tossToken; }, [tossToken]);
@@ -941,10 +963,9 @@ export default function KisVerificationPanel() {
     });
   }, []);
 
-  const loadAutoCandles = useCallback(async () => {
-    setAutoLoadingCandles(true);
+  const loadAutoCandles = useCallback(async (symbol: string) => {
     try {
-      const res = await fetch(`/api/stock/${autoSymbolRef.current}/candles?count=200`);
+      const res = await fetch(`/api/stock/${symbol}/candles?count=200`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const candles: { date: string; open: number; high: number; low: number; close: number; volume: number }[] = await res.json();
       if (!Array.isArray(candles) || candles.length === 0) throw new Error('캔들 데이터 없음');
@@ -954,213 +975,204 @@ export default function KisVerificationPanel() {
         open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
       }));
       const computed = computeIndicators(bars, AUTO_TRADE_CONFIG);
-      autoCandlesRef.current = computed;
-      if (candles.length > 0) autoLastCandleDayRef.current = candles[candles.length - 1].date;
+      autoCandlesMapRef.current[symbol] = computed;
+      if (candles.length > 0) autoLastCandleDayMapRef.current[symbol] = candles[candles.length - 1].date;
       return computed;
     } catch (e) {
       throw new Error(`캔들 로드 실패: ${e instanceof Error ? e.message : '알 수 없는 오류'}`);
-    } finally {
-      setAutoLoadingCandles(false);
     }
   }, []);
 
   const runAutoCheck = useCallback(async () => {
     if (!autoEnabledRef.current) return;
 
-    try {
-      // 0-a. 토큰 유효성 확인 및 갱신
-      const tokenOk = await refreshKisTokenIfNeeded();
-      if (!tokenOk) { addAutoLog('유효한 토큰 없음 — 다음 주기에 재시도', 'warning'); return; }
+    // 0-a. 토큰 유효성 확인 및 갱신
+    const tokenOk = await refreshKisTokenIfNeeded();
+    if (!tokenOk) { addAutoLog('유효한 토큰 없음 — 다음 주기에 재시도', 'warning'); return; }
 
-      // 0-b. 새 거래일 캔들 갱신 (KST 기준 날짜 변경 감지)
-      const _kst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
-      const todayKst = `${_kst.getFullYear()}${String(_kst.getMonth() + 1).padStart(2, '0')}${String(_kst.getDate()).padStart(2, '0')}`;
-      if (autoLastCandleDayRef.current && autoLastCandleDayRef.current !== todayKst) {
-        addAutoLog(`새 거래일 감지 (${autoLastCandleDayRef.current}→${todayKst}) — 캔들 갱신 중…`, 'info');
-        try { await loadAutoCandles(); addAutoLog('캔들 갱신 완료', 'success'); }
-        catch (e) { addAutoLog(`캔들 갱신 실패: ${e instanceof Error ? e.message : '오류'}`, 'warning'); }
-      }
+    const _kst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+    const todayKst = `${_kst.getFullYear()}${String(_kst.getMonth() + 1).padStart(2, '0')}${String(_kst.getDate()).padStart(2, '0')}`;
 
-      // 1. 실시간 현재가 조회
-      const priceRes = await fetch(`/api/kis/price?code=${autoSymbolRef.current}`, {
-        headers: kisHeadersFromRef() as Record<string, string>,
-      });
-      const priceData = await priceRes.json();
-      const currentPrice = parseInt(priceData.output?.stck_prpr ?? '0');
-      if (!currentPrice) {
+    const updatedMap: Record<string, SymbolWatchState> = { ...autoWatchMapRef.current };
+
+    for (const { code, name } of KOSPI_TOP10) {
+      try {
+        // 0-b. 새 거래일 캔들 갱신 (종목별)
+        if (!autoCandlesMapRef.current[code] || autoLastCandleDayMapRef.current[code] !== todayKst) {
+          try { await loadAutoCandles(code); } catch {}
+        }
+
+        // 1. 실시간 현재가 조회
+        const priceRes = await fetch(`/api/kis/price?code=${code}`, {
+          headers: kisHeadersFromRef() as Record<string, string>,
+        });
+        const priceData = await priceRes.json();
+        const currentPrice = parseInt(priceData.output?.stck_prpr ?? '0');
+        if (!currentPrice) continue;
+
+        // 2. 오늘 봉의 close를 현재가로 업데이트 후 지표 재계산
+        const prev = autoCandlesMapRef.current[code] ?? [];
+        if (prev.length < 30) continue;
+        const updated = [...prev.slice(0, -1), { ...prev[prev.length - 1], close: currentPrice }];
+        const computed = computeIndicators(updated, AUTO_TRADE_CONFIG);
+        autoCandlesMapRef.current[code] = computed;
+
+        // 3. 시뮬레이터와 동일한 신호 계산 (Ross Cameron MACD+RSI 전략)
+        const len = computed.length;
+        const currBar = computed[len - 1];
+        const prevBar = computed[len - 2];
+
+        const currRsi = currBar.rsi ?? 50;
+        const currMacd = currBar.macd ?? 0, currSig = currBar.macdSignal ?? 0;
+        const prevMacd = prevBar.macd ?? 0, prevSig = prevBar.macdSignal ?? 0;
+        const currHist = currBar.macdHist ?? 0, prevHist = prevBar.macdHist ?? 0;
+
+        const isGoldenCross  = prevMacd <= prevSig && currMacd > currSig;
+        const isDeadCross    = prevMacd >= prevSig && currMacd < currSig;
+        const histRising     = currHist > prevHist;
+        const histTurningUp  = histRising && prevHist <= 0 && currHist > 0;
+
+        const rsiPrime      = currRsi >= 50 && currRsi <= 70;
+        const rsiPullback   = currRsi >= 30 && currRsi < 50;
+        const rsiOverbought = currRsi > 70;
+
+        const aboveHMA100   = currBar.hma100   != null && currentPrice > currBar.hma100;
+        const aboveMA20     = currBar.ma20     != null && currentPrice > currBar.ma20;
+        const volumeConfirm = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
+        const hasBearishDiv = currBar.bearishDiv ?? false;
+
+        let buyScore = 0;
+        if (isGoldenCross)                         buyScore += 3;
+        else if (histTurningUp)                    buyScore += 1;
+        if (histRising)                            buyScore += 1;
+        if (rsiPrime)                              buyScore += 2;
+        else if (rsiPullback && aboveMA20)         buyScore += 1;
+        if (volumeConfirm)                         buyScore += 1;
+        if (aboveHMA100)                           buyScore += 1;
+
+        const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
+
+        let signal: SignalClass;
+        if (isDangerous)                                      signal = '위험';
+        else if (buyScore >= 6 && isGoldenCross && rsiPrime) signal = '매수후보';
+        else if (buyScore >= 4)                               signal = '관심';
+        else                                                  signal = '관망';
+
+        // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절
+        const position = autoPositionsMapRef.current[code] ?? null;
+        if (position && signal !== '위험') {
+          const swingLow = calcSwingLow(computed, 10);
+          const stopDist = position.avgPrice - swingLow;
+          const tpPrice  = position.avgPrice + stopDist * 2;
+          if (currentPrice <= swingLow) {
+            signal = '위험';
+            addAutoLog(`[${name}] ⛔ 손절: ${currentPrice.toLocaleString()} ≤ 스윙저점 ${swingLow.toLocaleString()}`, 'sell');
+          } else if (stopDist > 0 && currentPrice >= tpPrice) {
+            signal = '위험';
+            addAutoLog(`[${name}] 💰 익절: ${currentPrice.toLocaleString()} ≥ 목표가 ${Math.round(tpPrice).toLocaleString()} (RR 1:2)`, 'sell');
+          }
+        }
+
+        updatedMap[code] = { signal, price: currentPrice, position, score: buyScore, rsi: currRsi, macd: currMacd };
+
+        // 신호 로그 (매수후보/위험만)
+        if (signal === '매수후보' || signal === '위험') {
+          addAutoLog(
+            `[${name}] [${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8)`,
+            signal === '매수후보' ? 'buy' : 'sell',
+          );
+        }
+
+        // 4. 자동 주문 실행
+        if (signal === '매수후보' && !position && !autoPlacingMapRef.current[code]) {
+          const qty = parseInt(autoOrderQtyRef.current) || 1;
+          addAutoLog(`[${name}] ▶ 매수 신호 → ${qty}주 시장가 주문`, 'buy');
+          autoPlacingMapRef.current[code] = true;
+          try {
+            const r = await fetch('/api/kis/order', {
+              method: 'POST',
+              headers: kisHeadersFromRef() as Record<string, string>,
+              body: JSON.stringify({
+                cano: canoRef.current, acntPrdtCd: acntPrdtCdRef.current,
+                pdno: code, ordDvsn: '01', ordQty: qty, ordUnpr: 0, side: 'buy',
+              }),
+            });
+            const d = await r.json();
+            if (d.rt_cd === '0') {
+              const odno = d.output?.ODNO ?? '-';
+              const newPos = { qty, avgPrice: currentPrice };
+              autoPositionsMapRef.current[code] = newPos;
+              updatedMap[code] = { ...updatedMap[code], position: newPos };
+              addAutoLog(`[${name}] ✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${odno})`, 'success');
+              saveTrade(code, 'BUY', currentPrice, 'kis', qty);
+              try {
+                const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}');
+                localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, positions: autoPositionsMapRef.current }));
+              } catch {}
+            } else {
+              const errMsg = d.msg1 ?? d.msg_cd ?? '오류';
+              const isInsufficient = errMsg.includes('잔고') || errMsg.includes('부족') || errMsg.includes('주문가능') || errMsg.toLowerCase().includes('balance');
+              addAutoLog(`[${name}] ❌ 매수 실패: ${errMsg}${isInsufficient ? ' → 모의투자 잔고 확인' : ''}`, 'error');
+            }
+          } finally { autoPlacingMapRef.current[code] = false; }
+
+        } else if (signal === '위험' && position && !autoPlacingMapRef.current[code]) {
+          addAutoLog(`[${name}] ▶ 매도 신호 → ${position.qty}주 시장가 주문`, 'sell');
+          autoPlacingMapRef.current[code] = true;
+          try {
+            const r = await fetch('/api/kis/order', {
+              method: 'POST',
+              headers: kisHeadersFromRef() as Record<string, string>,
+              body: JSON.stringify({
+                cano: canoRef.current, acntPrdtCd: acntPrdtCdRef.current,
+                pdno: code, ordDvsn: '01', ordQty: position.qty, ordUnpr: 0, side: 'sell',
+              }),
+            });
+            const d = await r.json();
+            const profitPct = ((currentPrice - position.avgPrice) / position.avgPrice * 100).toFixed(2);
+            const sign = currentPrice >= position.avgPrice ? '+' : '';
+            if (d.rt_cd === '0') {
+              addAutoLog(`[${name}] ✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${sign}${profitPct}%) (${d.output?.ODNO ?? '-'})`, 'success');
+              saveTrade(code, 'SELL', currentPrice, 'kis', position.qty);
+              autoPositionsMapRef.current[code] = null;
+              updatedMap[code] = { ...updatedMap[code], position: null };
+              try {
+                const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}');
+                localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, positions: autoPositionsMapRef.current }));
+              } catch {}
+            } else {
+              addAutoLog(`[${name}] ❌ 매도 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error');
+            }
+          } finally { autoPlacingMapRef.current[code] = false; }
+        }
+
+        // API 레이트 리밋 방지 — 심볼 간 100ms 대기
+        await new Promise(r => setTimeout(r, 100));
+
+      } catch (e) {
         autoConsecErrorsRef.current++;
-        addAutoLog(`현재가 조회 실패 (연속 ${autoConsecErrorsRef.current}회)`, 'warning');
-        return;
-      }
-      autoConsecErrorsRef.current = 0; // 성공 시 초기화
-      setAutoLastPrice(currentPrice);
-
-      // 2. 오늘 봉의 close를 현재가로 업데이트 후 지표 재계산
-      const prev = autoCandlesRef.current;
-      if (prev.length < 30) { addAutoLog('캔들 데이터 부족', 'warning'); return; }
-      const updated = [...prev.slice(0, -1), { ...prev[prev.length - 1], close: currentPrice }];
-      const computed = computeIndicators(updated, AUTO_TRADE_CONFIG);
-      autoCandlesRef.current = computed;
-
-      // 3. 시뮬레이터와 동일한 신호 계산
-      const len = computed.length;
-      const currBar = computed[len - 1];
-      const prevBar = computed[len - 2];
-
-      const currRsi = currBar.rsi ?? 50, prevRsi = prevBar.rsi ?? 50;
-      const currMacd = currBar.macd ?? 0, currSig = currBar.macdSignal ?? 0;
-      const prevMacd = prevBar.macd ?? 0, prevSig = prevBar.macdSignal ?? 0;
-      const currHist = currBar.macdHist ?? 0, prevHist = prevBar.macdHist ?? 0;
-
-      // ── Ross Cameron MACD+RSI 전략 ─────────────────────────────────
-      const isGoldenCross  = prevMacd <= prevSig && currMacd > currSig;
-      const isDeadCross    = prevMacd >= prevSig && currMacd < currSig;
-      const histRising     = currHist > prevHist;
-      const histTurningUp  = histRising && prevHist <= 0 && currHist > 0; // 히스토그램 선전환 (프리-시그널)
-
-      const rsiPrime      = currRsi >= 50 && currRsi <= 70;    // 최우선 진입 구간
-      const rsiPullback   = currRsi >= 30 && currRsi < 50;     // 눌림목 진입 구간
-      const rsiOverbought = currRsi > 70;                       // 과열 → 진입 금지
-
-      const aboveHMA100   = currBar.hma100   != null && currentPrice > currBar.hma100;
-      const aboveMA20     = currBar.ma20     != null && currentPrice > currBar.ma20;
-      const volumeConfirm = currBar.volumeMA != null && currBar.volume > currBar.volumeMA;
-
-      const hasBearishDiv = currBar.bearishDiv ?? false;
-
-      let buyScore = 0;
-      if (isGoldenCross)                         buyScore += 3;
-      else if (histTurningUp)                    buyScore += 1;
-      if (histRising)                            buyScore += 1;
-      if (rsiPrime)                              buyScore += 2;
-      else if (rsiPullback && aboveMA20)         buyScore += 1;
-      if (volumeConfirm)                         buyScore += 1;
-      if (aboveHMA100)                           buyScore += 1;
-
-      const isDangerous = (rsiOverbought && isDeadCross) || (hasBearishDiv && isDeadCross);
-
-      let signal: SignalClass;
-      if (isDangerous)                                      signal = '위험';
-      else if (buyScore >= 6 && isGoldenCross && rsiPrime) signal = '매수후보';
-      else if (buyScore >= 4)                               signal = '관심';
-      else                                                  signal = '관망';
-
-      // Ross Cameron 포지션 관리: 스윙저점 손절 / RR 1:2 익절
-      const position = autoPositionRef.current;
-      if (position && signal !== '위험') {
-        const swingLow   = calcSwingLow(computed, 10);
-        const stopDist   = position.avgPrice - swingLow;
-        const tpPrice    = position.avgPrice + stopDist * 2; // RR 1:2
-        if (currentPrice <= swingLow) {
-          signal = '위험';
-          addAutoLog(`⛔ 손절: 현재가 ${currentPrice.toLocaleString()} ≤ 스윙저점 ${swingLow.toLocaleString()}`, 'sell');
-        } else if (stopDist > 0 && currentPrice >= tpPrice) {
-          signal = '위험';
-          addAutoLog(`💰 익절: 현재가 ${currentPrice.toLocaleString()} ≥ 목표가 ${Math.round(tpPrice).toLocaleString()} (RR 1:2)`, 'sell');
+        const errMsg = e instanceof Error ? e.message : '알 수 없는 오류';
+        addAutoLog(`[${name}] 오류 (${autoConsecErrorsRef.current}회): ${errMsg}`, 'error');
+        if (autoConsecErrorsRef.current >= 30) {
+          addAutoLog(`❌ 연속 오류 과다 — 자동매매를 자동 중단합니다.`, 'error');
+          autoEnabledRef.current = false; setAutoEnabled(false);
+          if (autoIntervalRef.current) { clearInterval(autoIntervalRef.current); autoIntervalRef.current = null; }
+          try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, active: false })); } catch {}
+          return;
         }
       }
-
-      const strength = currBar.signalStrength ?? 0;
-      setAutoSignal(signal);
-      setAutoIndicators({ rsi: currRsi, macd: currMacd, macdSig: currSig, macdHist: currHist, strength, trendState: currBar.trendState ?? 'neutral' });
-
-      const flags = [
-        isGoldenCross   ? '골든크로스' : null,
-        isDeadCross     ? '데드크로스' : null,
-        histTurningUp   ? '히스트선전환' : histRising ? '히스트↑' : null,
-        rsiPrime        ? 'RSI모멘텀' : rsiPullback ? 'RSI눌림' : null,
-        volumeConfirm   ? '거래량↑' : null,
-        aboveHMA100     ? 'HMA위' : null,
-        hasBearishDiv   ? '⚠다이버전스' : null,
-      ].filter(Boolean).join(' ');
-
-      // 매수후보 미달 시 부족한 조건 표시
-      const lacking: string[] = [];
-      if (signal !== '매수후보' && signal !== '위험') {
-        if (!isGoldenCross) lacking.push('골든크로스 없음');
-        if (!rsiPrime)      lacking.push(`RSI ${currRsi.toFixed(0)} (필요: 50-70)`);
-        if (buyScore < 6)   lacking.push(`점수 ${buyScore}/6 미달`);
-      }
-
-      addAutoLog(
-        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8${flags ? ' · ' + flags : ''})${lacking.length ? '  ⚑ ' + lacking.join(' / ') : ''}`,
-        signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
-      );
-
-      // 4. 자동 주문 실행
-      if (signal === '매수후보' && !position && !autoPlacingRef.current) {
-        const qty = parseInt(autoOrderQtyRef.current) || 1;
-        addAutoLog(`▶ 매수 신호 → ${qty}주 시장가 주문`, 'buy');
-        autoPlacingRef.current = true; setAutoPlacing(true);
-        try {
-          const r = await fetch('/api/kis/order', {
-            method: 'POST',
-            headers: kisHeadersFromRef() as Record<string, string>,
-            body: JSON.stringify({
-              cano: canoRef.current, acntPrdtCd: acntPrdtCdRef.current,
-              pdno: autoSymbolRef.current, ordDvsn: '01', ordQty: qty, ordUnpr: 0, side: 'buy',
-            }),
-          });
-          const d = await r.json();
-          if (d.rt_cd === '0') {
-            const odno = d.output?.ODNO ?? '-';
-            const newPos = { qty, avgPrice: currentPrice };
-            autoPositionRef.current = newPos; setAutoPosition(newPos);
-            addAutoLog(`✅ 매수 완료: ${qty}주 @ ${currentPrice.toLocaleString()}원 (${odno})`, 'success');
-            saveTrade(autoSymbolRef.current, 'BUY', currentPrice, 'kis', qty);
-            try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: newPos })); } catch {}
-          } else {
-            const errMsg = d.msg1 ?? d.msg_cd ?? '오류';
-            const isInsufficientBalance = errMsg.includes('잔고') || errMsg.includes('부족') || errMsg.includes('주문가능') || errMsg.toLowerCase().includes('balance');
-            addAutoLog(
-              `❌ 매수 실패: ${errMsg}${isInsufficientBalance ? ' → KIS Developers(apiportal.koreainvestment.com) 모의투자 계좌에서 가상 잔고를 확인하세요' : ''}`,
-              'error',
-            );
-          }
-        } finally { autoPlacingRef.current = false; setAutoPlacing(false); }
-
-      } else if (signal === '위험' && position && !autoPlacingRef.current) {
-        addAutoLog(`▶ 매도 신호 → ${position.qty}주 시장가 주문`, 'sell');
-        autoPlacingRef.current = true; setAutoPlacing(true);
-        try {
-          const r = await fetch('/api/kis/order', {
-            method: 'POST',
-            headers: kisHeadersFromRef() as Record<string, string>,
-            body: JSON.stringify({
-              cano: canoRef.current, acntPrdtCd: acntPrdtCdRef.current,
-              pdno: autoSymbolRef.current, ordDvsn: '01', ordQty: position.qty, ordUnpr: 0, side: 'sell',
-            }),
-          });
-          const d = await r.json();
-          const profitPct = ((currentPrice - position.avgPrice) / position.avgPrice * 100).toFixed(2);
-          const sign = currentPrice >= position.avgPrice ? '+' : '';
-          if (d.rt_cd === '0') {
-            addAutoLog(`✅ 매도 완료: ${position.qty}주 @ ${currentPrice.toLocaleString()}원 (${sign}${profitPct}%) (${d.output?.ODNO ?? '-'})`, 'success');
-            saveTrade(autoSymbolRef.current, 'SELL', currentPrice, 'kis', position.qty);
-            autoPositionRef.current = null; setAutoPosition(null);
-            try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, position: null })); } catch {}
-          } else { addAutoLog(`❌ 매도 실패: ${d.msg1 ?? d.msg_cd ?? '오류'}`, 'error'); }
-        } finally { autoPlacingRef.current = false; setAutoPlacing(false); }
-      }
-    } catch (e) {
-      autoConsecErrorsRef.current++;
-      const errMsg = e instanceof Error ? e.message : '알 수 없는 오류';
-      if (autoConsecErrorsRef.current >= 10) {
-        addAutoLog(`❌ 연속 ${autoConsecErrorsRef.current}회 오류 — 자동매매를 자동 중단합니다. (${errMsg})`, 'error');
-        autoEnabledRef.current = false; setAutoEnabled(false);
-        if (autoIntervalRef.current) { clearInterval(autoIntervalRef.current); autoIntervalRef.current = null; }
-        try { const s = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}'); localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({ ...s, active: false })); } catch {}
-      } else {
-        addAutoLog(`오류 (${autoConsecErrorsRef.current}회): ${errMsg}`, 'error');
-      }
     }
+
+    autoConsecErrorsRef.current = 0;
+    autoWatchMapRef.current = updatedMap;
+    setAutoWatchMap({ ...updatedMap });
   }, [addAutoLog, refreshKisTokenIfNeeded, loadAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startAutoTrade = useCallback(async () => {
     if (!canoRef.current) { addAutoLog('계좌번호를 먼저 입력하고 KIS에 연결하세요.', 'error'); return; }
-    addAutoLog(`${autoSymbolRef.current} 일봉 200개 로드 중…`, 'info');
+    addAutoLog(`코스피 TOP 10 캔들 로드 중… (${KOSPI_TOP10.length}개 종목)`, 'info');
     try {
-      // 잔고 사전 확인 (계좌번호 쿼리파라미터 필수)
+      // 잔고 사전 확인
       try {
         const balRes = await fetch(
           `/api/kis/balance?cano=${encodeURIComponent(canoRef.current)}&acntPrdtCd=${encodeURIComponent(acntPrdtCdRef.current)}`,
@@ -1180,15 +1192,24 @@ export default function KisVerificationPanel() {
         addAutoLog(`잔고 조회 실패: ${e instanceof Error ? e.message : '오류'} — 자동매매는 계속 진행합니다.`, 'warning');
       }
 
-      await loadAutoCandles();
-      addAutoLog('캔들 로드 완료. 자동매매 시작!', 'success');
+      setAutoLoadingCandles(true);
+      for (const { code, name } of KOSPI_TOP10) {
+        try {
+          await loadAutoCandles(code);
+          addAutoLog(`  ✓ ${name}(${code}) 캔들 로드`, 'info');
+        } catch (e) {
+          addAutoLog(`  ✗ ${name}(${code}) 로드 실패`, 'warning');
+        }
+      }
+      setAutoLoadingCandles(false);
+      addAutoLog('전체 로드 완료. 자동매매 시작!', 'success');
       autoEnabledRef.current = true;
       setAutoEnabled(true);
       // localStorage에 활성 상태 저장 (새로고침 복구용)
       try {
         localStorage.setItem('tbbuilder:auto:kis', JSON.stringify({
-          active: true, symbol: autoSymbolRef.current, qty: autoOrderQtyRef.current,
-          interval: autoCheckInterval, position: autoPositionRef.current,
+          active: true, symbols: KOSPI_TOP10.map(s => s.code), qty: autoOrderQtyRef.current,
+          interval: autoCheckInterval, positions: autoPositionsMapRef.current,
           serverType: kisServerTypeRef.current,
         }));
       } catch {}
@@ -1196,6 +1217,7 @@ export default function KisVerificationPanel() {
       const iv = parseInt(String(autoCheckInterval)) || 30;
       autoIntervalRef.current = setInterval(runAutoCheck, iv * 1000);
     } catch (e) {
+      setAutoLoadingCandles(false);
       addAutoLog(e instanceof Error ? e.message : '시작 실패', 'error');
     }
   }, [loadAutoCandles, runAutoCheck, addAutoLog, autoCheckInterval]);
@@ -2780,14 +2802,14 @@ if __name__ == "__main__":
   );
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 자동매매 UI
+  // 자동매매 UI (코스피 TOP 10 멀티 종목)
   // ═══════════════════════════════════════════════════════════════════════════
   const renderAutoTrade = () => {
-    const signalColor: Record<SignalClass, string> = {
-      '매수후보': 'text-emerald-300 border-emerald-500 bg-emerald-900',
-      '관심':    'text-blue-200 border-blue-500 bg-blue-900',
-      '관망':    'text-slate-300 border-slate-600 bg-slate-800',
-      '위험':    'text-rose-200 border-rose-500 bg-rose-900',
+    const signalBadge: Record<SignalClass, string> = {
+      '매수후보': 'bg-emerald-900 text-emerald-300 border border-emerald-600',
+      '관심':    'bg-amber-900 text-amber-300 border border-amber-600',
+      '관망':    'bg-slate-800 text-slate-400 border border-slate-600',
+      '위험':    'bg-rose-900 text-rose-300 border border-rose-600',
     };
     const logColor: Record<string, string> = {
       buy: 'text-emerald-400', sell: 'text-rose-400',
@@ -2795,58 +2817,18 @@ if __name__ == "__main__":
       warning: 'text-amber-400', info: 'text-slate-400',
     };
 
-    const kisTradeMarkers: TradeMarker[] = autoLogs
-      .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
-      .map(l => {
-        const priceMatch = l.msg.match(/@ ([\d,]+)원/);
-        const price = priceMatch ? parseInt(priceMatch[1].replace(/,/g, '')) : 0;
-        const [h, m, s] = l.time.split(':').map(Number);
-        const d = new Date(); d.setHours(h, m, s, 0);
-        return { timestamp: d.getTime(), type: l.msg.includes('매수') ? 'BUY' as const : 'SELL' as const, price };
-      })
-      .filter(m => m.price > 0);
-
     return (
       <div className="space-y-4">
-        {/* 차트 */}
-        {autoSymbol.length === 6 && (
-          <AutoTradeChart
-            symbol={autoSymbol}
-            position={autoPosition}
-            signal={autoSignal}
-            lastPrice={autoLastPrice}
-            tradeMarkers={kisTradeMarkers}
-            stopLossPct={2.5}
-            takeProfitPct={7.0}
-          />
-        )}
-
         {/* 전략 안내 */}
         <div className="p-3 bg-slate-950/60 border border-slate-700/50 rounded-xl text-[10px] text-slate-400 leading-relaxed space-y-1">
-          <p className="font-bold text-slate-300 text-[11px]">적용 전략: MACD 골든/데드크로스 + RSI 과매도 필터 (시뮬레이터 동일 로직)</p>
-          <p>① MACD 골든크로스 (MACD선이 시그널선 상향 돌파) <span className="text-emerald-400">+2점</span></p>
-          <p>② MACD 히스토그램 증가 <span className="text-emerald-400">+1점</span></p>
-          <p>③ RSI 과매도(≤{AUTO_TRADE_CONFIG.rsiOversold}) 이탈 반등 <span className="text-emerald-400">+2점</span></p>
-          <p>④ 현재가 MA20 위 <span className="text-emerald-400">+1점</span> &nbsp; ⑤ 거래량 MA 초과 <span className="text-emerald-400">+1점</span></p>
-          <p className="text-amber-400">▶ 5점 이상 → <strong>매수</strong> | RSI 과열 이력 + 데드크로스 → <strong>매도</strong></p>
+          <p className="font-bold text-slate-300 text-[11px]">코스피 TOP 10 동시 감시 · Ross Cameron MACD+RSI 전략</p>
+          <p>① MACD 골든크로스 <span className="text-emerald-400">+3점</span> &nbsp; ② 히스토그램 증가 <span className="text-emerald-400">+1점</span> &nbsp; ③ RSI 50-70 <span className="text-emerald-400">+2점</span></p>
+          <p>④ 거래량 MA 초과 <span className="text-emerald-400">+1점</span> &nbsp; ⑤ HMA100 위 <span className="text-emerald-400">+1점</span></p>
+          <p className="text-amber-400">▶ 6점 이상 + 골든크로스 + RSI모멘텀 → <strong>매수</strong> | RSI 과열 + 데드크로스 → <strong>매도</strong></p>
         </div>
 
-        {/* 종목코드 + 주문수량 + 조회주기 */}
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 mb-1">종목코드 (6자리)</label>
-            <input
-              type="text" maxLength={6} value={autoSymbol}
-              onChange={e => {
-                const v = e.target.value.replace(/\D/g, '');
-                setAutoSymbol(v);
-                setAutoSymbolName(v === '000660' ? 'SK 하이닉스' : v === '005930' ? '삼성전자' : v);
-              }}
-              disabled={autoEnabled}
-              placeholder="예: 000660"
-              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
-            />
-          </div>
+        {/* 주문수량 + 조회주기 */}
+        <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-[10px] font-bold text-slate-400 mb-1">1회 주문수량 (주)</label>
             <input
@@ -2867,50 +2849,107 @@ if __name__ == "__main__":
           </div>
         </div>
 
-        {/* 상태 패널 */}
-        <div className="grid grid-cols-2 gap-3">
-          {/* 현재 신호 */}
-          <div className={`p-3 rounded-xl border ${signalColor[autoSignal]}`}>
-            <div className="text-[9px] font-bold mb-1 opacity-70">현재 신호</div>
-            <div className="text-sm font-black">{autoSignal}</div>
-            {autoIndicators && (
-              <div className="mt-1 text-[9px] opacity-80 space-y-0.5 font-mono">
-                <div>신호강도: {autoIndicators.strength > 0 ? '+' : ''}{autoIndicators.strength}%</div>
-                <div>추세: {autoIndicators.trendState}</div>
-                <div>RSI: {autoIndicators.rsi.toFixed(1)}</div>
-                <div>MACD: {autoIndicators.macd.toFixed(2)} / Sig: {autoIndicators.macdSig.toFixed(2)}</div>
-                <div>Hist: {autoIndicators.macdHist.toFixed(3)}</div>
-              </div>
-            )}
+        {/* 코스피 TOP 10 감시 테이블 */}
+        <div className="rounded-xl border border-slate-700 overflow-hidden">
+          <div className="bg-slate-900 px-3 py-2 text-[10px] font-bold text-slate-400 border-b border-slate-700">
+            코스피 TOP 10 감시 목록
           </div>
-          {/* 현재 포지션 */}
-          <div className={`p-3 rounded-xl border ${autoPosition ? 'border-emerald-600 bg-emerald-950/20' : 'border-slate-700 bg-slate-900'}`}>
-            <div className="text-[9px] font-bold text-slate-400 mb-1">보유 포지션</div>
-            {autoPosition ? (
-              <div className="text-[10px] font-mono space-y-0.5">
-                <div className="text-emerald-300 font-bold">{autoSymbol} {autoPosition.qty}주</div>
-                <div className="text-slate-400">평균단가: {autoPosition.avgPrice.toLocaleString()}원</div>
-                {autoLastPrice > 0 && (
-                  <div className={autoLastPrice >= autoPosition.avgPrice ? 'text-emerald-400' : 'text-rose-400'}>
-                    현재: {autoLastPrice.toLocaleString()}원 ({autoLastPrice >= autoPosition.avgPrice ? '+' : ''}{((autoLastPrice - autoPosition.avgPrice) / autoPosition.avgPrice * 100).toFixed(2)}%)
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-[10px] text-slate-500">포지션 없음</div>
-            )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-[10px]">
+              <thead>
+                <tr className="bg-slate-950 text-slate-500 text-[9px]">
+                  <th className="text-left px-3 py-2">종목</th>
+                  <th className="text-right px-3 py-2">현재가</th>
+                  <th className="text-center px-3 py-2">신호</th>
+                  <th className="text-center px-3 py-2">점수</th>
+                  <th className="text-right px-3 py-2">RSI</th>
+                  <th className="text-left px-3 py-2">포지션</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {KOSPI_TOP10.map(({ code, name }) => {
+                  const w = autoWatchMap[code];
+                  const pos = w?.position ?? null;
+                  const signal = w?.signal ?? '관망';
+                  return (
+                    <tr key={code} className="border-t border-slate-800 hover:bg-slate-900/50 transition-colors">
+                      <td className="px-3 py-2">
+                        <div className="font-bold text-slate-200">{name}</div>
+                        <div className="text-slate-600 font-mono">{code}</div>
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono">
+                        {w?.price ? (
+                          <span className="text-slate-100 font-bold">{w.price.toLocaleString()}원</span>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${signalBadge[signal]}`}>
+                          {signal}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-center text-slate-400 font-mono">
+                        {w ? `${w.score}/8` : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-400">
+                        {w ? w.rsi.toFixed(1) : '—'}
+                      </td>
+                      <td className="px-3 py-2">
+                        {pos ? (
+                          <div className="text-emerald-400 font-mono">
+                            <div>{pos.qty}주 @{pos.avgPrice.toLocaleString()}</div>
+                            {w?.price && (
+                              <div className={w.price >= pos.avgPrice ? 'text-emerald-300' : 'text-rose-300'}>
+                                {w.price >= pos.avgPrice ? '+' : ''}{((w.price - pos.avgPrice) / pos.avgPrice * 100).toFixed(1)}%
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {pos && autoEnabled && (
+                          <button
+                            onClick={async () => {
+                              if (!w?.price) return;
+                              addAutoLog(`[${name}] ▶ 수동 매도 → ${pos.qty}주`, 'sell');
+                              autoPlacingMapRef.current[code] = true;
+                              try {
+                                const r = await fetch('/api/kis/order', {
+                                  method: 'POST',
+                                  headers: kisHeadersFromRef() as Record<string, string>,
+                                  body: JSON.stringify({
+                                    cano: canoRef.current, acntPrdtCd: acntPrdtCdRef.current,
+                                    pdno: code, ordDvsn: '01', ordQty: pos.qty, ordUnpr: 0, side: 'sell',
+                                  }),
+                                });
+                                const d = await r.json();
+                                if (d.rt_cd === '0') {
+                                  addAutoLog(`[${name}] ✅ 수동 매도 완료: ${pos.qty}주 (${d.output?.ODNO ?? '-'})`, 'success');
+                                  autoPositionsMapRef.current[code] = null;
+                                  setAutoWatchMap(prev => ({ ...prev, [code]: { ...prev[code], position: null } }));
+                                } else {
+                                  addAutoLog(`[${name}] ❌ 수동 매도 실패: ${d.msg1 ?? '오류'}`, 'error');
+                                }
+                              } finally { autoPlacingMapRef.current[code] = false; }
+                            }}
+                            disabled={!!autoPlacingMapRef.current[code]}
+                            className="px-2 py-1 rounded text-[9px] font-bold bg-amber-700 hover:bg-amber-600 text-white transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                          >
+                            즉시매도
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
-
-        {/* 현재가 */}
-        {autoLastPrice > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <Activity className="h-3.5 w-3.5 text-slate-500" />
-            <span className="text-slate-400">최근 조회:</span>
-            <span className="font-mono font-bold text-slate-100">{autoLastPrice.toLocaleString()}원</span>
-            <span className="text-[9px] text-slate-600">{autoSymbol}</span>
-          </div>
-        )}
 
         {/* 장 시간 자동 스케줄러 */}
         <div className={`p-3 rounded-xl border ${autoScheduleEnabled ? 'border-indigo-600 bg-indigo-950/25' : 'border-slate-700 bg-slate-900'}`}>
@@ -2935,7 +2974,7 @@ if __name__ == "__main__":
             </div>
           )}
           {!autoScheduleEnabled && (
-            <p className="text-[9px] text-slate-500">활성화하면 KIS 모의투자를 09:00에 자동 연결하고 자동매매를 시작합니다. 15:30 장 마감 시 자동 중지.</p>
+            <p className="text-[9px] text-slate-500">활성화하면 KIS 모의투자를 09:00에 자동 연결하고 코스피 TOP 10 자동매매를 시작합니다. 15:30 장 마감 시 자동 중지.</p>
           )}
         </div>
 
@@ -2943,54 +2982,19 @@ if __name__ == "__main__":
         {!autoEnabled ? (
           <button
             onClick={startAutoTrade}
-            disabled={connStatus !== 'connected' || autoLoadingCandles || autoSymbol.length !== 6}
+            disabled={connStatus !== 'connected' || autoLoadingCandles}
             className="w-full py-2.5 rounded-xl text-sm font-bold bg-emerald-700 hover:bg-emerald-600 text-white transition flex items-center justify-center gap-2 disabled:opacity-40 cursor-pointer"
           >
             {autoLoadingCandles
               ? <><RefreshCw className="h-4 w-4 animate-spin" />캔들 로드 중…</>
-              : <><Bot className="h-4 w-4" />자동매매 시작</>}
+              : <><Bot className="h-4 w-4" />코스피 TOP 10 자동매매 시작</>}
           </button>
         ) : (
           <button
             onClick={stopAutoTrade}
             className="w-full py-2.5 rounded-xl text-sm font-bold bg-rose-700 hover:bg-rose-600 text-white transition flex items-center justify-center gap-2 cursor-pointer"
           >
-            {autoPlacing
-              ? <><RefreshCw className="h-4 w-4 animate-spin" />주문 처리 중…</>
-              : <><StopCircle className="h-4 w-4" />자동매매 중지</>}
-          </button>
-        )}
-
-        {/* 주문 보류 배지 */}
-        {autoPosition && autoEnabled && (
-          <button
-            onClick={async () => {
-              if (!autoPosition) return;
-              const currentPrice = autoLastPrice;
-              if (!currentPrice) return;
-              addAutoLog(`▶ 수동 매도 → ${autoPosition.qty}주`, 'sell');
-              setAutoPlacing(true);
-              const r = await fetch('/api/kis/order', {
-                method: 'POST',
-                headers: kisHeaders() as Record<string, string>,
-                body: JSON.stringify({
-                  cano, acntPrdtCd, pdno: autoSymbolRef.current,
-                  ordDvsn: '01', ordQty: autoPosition.qty, ordUnpr: 0, side: 'sell',
-                }),
-              });
-              const d = await r.json();
-              if (d.rt_cd === '0') {
-                addAutoLog(`✅ 수동 매도 완료: ${autoPosition.qty}주 (${d.output?.ODNO})`, 'success');
-                autoPositionRef.current = null; setAutoPosition(null);
-              } else {
-                addAutoLog(`❌ 수동 매도 실패: ${d.msg1 ?? '오류'}`, 'error');
-              }
-              setAutoPlacing(false);
-            }}
-            disabled={autoPlacing}
-            className="w-full py-1.5 rounded-xl text-xs font-bold bg-amber-700 hover:bg-amber-600 text-white border border-amber-600 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
-          >
-            <TrendingDown className="h-3.5 w-3.5" />지금 즉시 매도 (수동)
+            <StopCircle className="h-4 w-4" />자동매매 중지
           </button>
         )}
 
@@ -3915,8 +3919,12 @@ kiwoom = win32com.client.Dispatch("KHOPENAPI.KHOpenAPICtrl.1")
           {autoEnabled && (
             <span className="flex items-center gap-1">
               <Bot className="h-3.5 w-3.5" />
-              KIS — {autoSymbol} · {autoCheckInterval}s
-              {autoPosition && <span className="ml-1 text-emerald-400">({autoPosition.qty}주 보유)</span>}
+              KIS — 코스피 TOP 10 · {autoCheckInterval}s
+              {(Object.values(autoWatchMap) as SymbolWatchState[]).some(w => w.position) && (
+                <span className="ml-1 text-emerald-400">
+                  ({(Object.values(autoWatchMap) as SymbolWatchState[]).filter(w => w.position).length}종목 보유)
+                </span>
+              )}
             </span>
           )}
           {tossAutoEnabled && (
