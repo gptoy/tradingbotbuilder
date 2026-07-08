@@ -218,6 +218,8 @@ export default function KisVerificationPanel() {
   const [autoLoadingCandles, setAutoLoadingCandles] = useState(false);
   const [autoLogs, setAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning'; msg: string }[]>([]);
   const [autoCheckInterval, setAutoCheckInterval] = useState(30); // seconds
+  const [autoLastCheckTime, setAutoLastCheckTime] = useState('');
+  const [autoLogFilter, setAutoLogFilter]         = useState<'all' | 'trade'>('all');
 
   // ── 장 시간 자동 스케줄러 ──────────────────────────────────────────────────
   const [autoScheduleEnabled, setAutoScheduleEnabled] = useState(false);
@@ -261,6 +263,8 @@ export default function KisVerificationPanel() {
   const [tossAutoWatchMap, setTossAutoWatchMap]           = useState<Record<string, SymbolWatchState>>({});
   const [tossAutoLogs, setTossAutoLogs]                   = useState<{ id: number; time: string; type: 'info' | 'buy' | 'sell' | 'success' | 'error' | 'warning'; msg: string }[]>([]);
   const [tossAutoLoadingCandles, setTossAutoLoadingCandles] = useState(false);
+  const [tossAutoLastCheckTime, setTossAutoLastCheckTime] = useState('');
+  const [tossAutoLogFilter, setTossAutoLogFilter]         = useState<'all' | 'trade'>('all');
 
   const tossAutoEnabledRef    = useRef(false);
   const tossAutoCandlesMapRef = useRef<Record<string, MarketBar[]>>({});
@@ -1167,6 +1171,7 @@ export default function KisVerificationPanel() {
     autoConsecErrorsRef.current = 0;
     autoWatchMapRef.current = updatedMap;
     setAutoWatchMap({ ...updatedMap });
+    setAutoLastCheckTime(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
   }, [addAutoLog, refreshKisTokenIfNeeded, loadAutoCandles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startAutoTrade = useCallback(async () => {
@@ -1548,6 +1553,7 @@ export default function KisVerificationPanel() {
       tossAutoWatchMapRef.current = updatedMap;
       setTossAutoWatchMap({ ...updatedMap });
       tossAutoConsecErrorsRef.current = 0;
+      setTossAutoLastCheckTime(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     } catch (e) {
       tossAutoConsecErrorsRef.current++;
       const errMsg = e instanceof Error ? e.message : '알 수 없는 오류';
@@ -2826,6 +2832,32 @@ if __name__ == "__main__":
   // 자동매매 UI (코스피 TOP 10 멀티 종목)
   // ═══════════════════════════════════════════════════════════════════════════
   const renderAutoTrade = () => {
+    // ─── 파생 데이터 계산 ────────────────────────────────────────────
+    const holdings = KOSPI_TOP10
+      .map(({ code, name }) => {
+        const w = autoWatchMap[code];
+        if (!w?.position) return null;
+        const pnl    = w.price ? (w.price - w.position.avgPrice) * w.position.qty : 0;
+        const pnlPct = w.price ? ((w.price - w.position.avgPrice) / w.position.avgPrice * 100) : 0;
+        return { code, name, position: w.position, price: w.price, pnl, pnlPct, signal: w.signal };
+      })
+      .filter((h): h is NonNullable<typeof h> => h !== null);
+
+    const totalInvested = holdings.reduce((sum, h) => sum + h.position.avgPrice * h.position.qty, 0);
+    const totalPnl      = holdings.reduce((sum, h) => sum + h.pnl, 0);
+    const totalPnlPct   = totalInvested > 0 ? (totalPnl / totalInvested * 100) : 0;
+
+    const recentTrades = autoLogs
+      .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
+      .slice(0, 6);
+
+    const buyAlerts  = KOSPI_TOP10.filter(({ code }) => autoWatchMap[code]?.signal === '매수후보');
+    const sellAlerts = KOSPI_TOP10.filter(({ code }) => autoWatchMap[code]?.signal === '위험');
+
+    const filteredLogs = autoLogFilter === 'trade'
+      ? autoLogs.filter(l => ['buy','sell','success'].includes(l.type))
+      : autoLogs;
+
     const signalBadge: Record<SignalClass, string> = {
       '매수후보': 'bg-emerald-900 text-emerald-300 border border-emerald-600',
       '관심':    'bg-amber-900 text-amber-300 border border-amber-600',
@@ -2839,41 +2871,125 @@ if __name__ == "__main__":
     };
 
     return (
-      <div className="space-y-4">
-        {/* 전략 안내 */}
-        <div className="p-3 bg-slate-950/60 border border-slate-700/50 rounded-xl text-[10px] text-slate-400 leading-relaxed space-y-1">
-          <p className="font-bold text-slate-300 text-[11px]">코스피 TOP 10 동시 감시 · Ross Cameron MACD+RSI 전략</p>
-          <p>① MACD 골든크로스 <span className="text-emerald-400">+3점</span> &nbsp; ② 히스토그램 증가 <span className="text-emerald-400">+1점</span> &nbsp; ③ RSI 50-70 <span className="text-emerald-400">+2점</span></p>
-          <p>④ 거래량 MA 초과 <span className="text-emerald-400">+1점</span> &nbsp; ⑤ HMA100 위 <span className="text-emerald-400">+1점</span></p>
-          <p className="text-amber-400">▶ 6점 이상 + 골든크로스 + RSI모멘텀 → <strong>매수</strong> | RSI 과열 + 데드크로스 → <strong>매도</strong></p>
+      <div className="space-y-3">
+
+        {/* ── 상태 배너 ── */}
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] ${autoEnabled ? 'bg-emerald-950/40 border-emerald-700/50' : 'bg-slate-900 border-slate-700'}`}>
+          {autoEnabled
+            ? <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            : <span className="h-2 w-2 rounded-full bg-slate-600 shrink-0" />}
+          <span className={`font-bold ${autoEnabled ? 'text-emerald-200' : 'text-slate-400'}`}>
+            {autoEnabled ? '코스피 TOP 10 감시 중' : '대기 중'}
+          </span>
+          {autoEnabled && <span className="text-slate-400 font-mono">· {autoCheckInterval}s 주기</span>}
+          {autoLastCheckTime && <span className="text-slate-500 font-mono text-[10px]">· 마지막: {autoLastCheckTime}</span>}
+          {holdings.length > 0 && (
+            <span className="ml-auto font-bold text-emerald-300">{holdings.length}종목 보유</span>
+          )}
         </div>
 
-        {/* 주문수량 + 조회주기 */}
+        {/* ── 신호 알림 배너 ── */}
+        {(buyAlerts.length > 0 || sellAlerts.length > 0) && (
+          <div className="flex flex-wrap gap-2">
+            {buyAlerts.map(({ code, name }) => (
+              <div key={code} className="flex items-center gap-1.5 px-2 py-1 bg-emerald-950 border border-emerald-600 rounded-lg text-[10px] animate-pulse">
+                <span className="text-emerald-400 font-bold">▲ 매수후보</span>
+                <span className="text-emerald-200 font-bold">{name}</span>
+                <span className="text-emerald-500 font-mono">{autoWatchMap[code]?.price?.toLocaleString()}원</span>
+              </div>
+            ))}
+            {sellAlerts.map(({ code, name }) => (
+              <div key={code} className="flex items-center gap-1.5 px-2 py-1 bg-rose-950 border border-rose-600 rounded-lg text-[10px] animate-pulse">
+                <span className="text-rose-400 font-bold">▼ 위험</span>
+                <span className="text-rose-200 font-bold">{name}</span>
+                <span className="text-rose-500 font-mono">{autoWatchMap[code]?.price?.toLocaleString()}원</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── 포트폴리오 + 최근 매매 ── */}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 mb-1">1회 주문수량 (주)</label>
-            <input
-              type="number" min="1" value={autoOrderQty}
-              onChange={e => setAutoOrderQty(e.target.value)}
-              disabled={autoEnabled}
-              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
-            />
+          {/* 포트폴리오 요약 */}
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 space-y-2">
+            <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1.5">
+              <span>포트폴리오</span>
+              {holdings.length > 0 && <span className="text-slate-500">({holdings.length}종목)</span>}
+            </div>
+            {holdings.length === 0 ? (
+              <p className="text-[10px] text-slate-600">보유 포지션 없음</p>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  {holdings.map(h => (
+                    <div key={h.code} className="flex items-center justify-between text-[10px]">
+                      <span className="text-slate-300 font-bold truncate max-w-[80px]">{h.name}</span>
+                      <span className={`font-mono font-bold ${h.pnlPct >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                        {h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="border-t border-slate-700 pt-2 space-y-0.5">
+                  <div className="flex justify-between text-[10px]">
+                    <span className="text-slate-500">총 투자</span>
+                    <span className="text-slate-300 font-mono">{totalInvested.toLocaleString()}원</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] font-bold">
+                    <span className="text-slate-400">평가손익</span>
+                    <span className={`font-mono ${totalPnl >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                      {totalPnl >= 0 ? '+' : ''}{totalPnl.toLocaleString()}원
+                      <span className="text-[9px] ml-1">({totalPnlPct >= 0 ? '+' : ''}{totalPnlPct.toFixed(1)}%)</span>
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
-            <input
-              type="number" min="10" max="300" value={autoCheckInterval}
-              onChange={e => setAutoCheckInterval(parseInt(e.target.value) || 30)}
-              disabled={autoEnabled}
-              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
-            />
+
+          {/* 최근 매매 피드 */}
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-3">
+            <div className="text-[10px] font-bold text-slate-400 mb-2">최근 매매</div>
+            {recentTrades.length === 0 ? (
+              <p className="text-[10px] text-slate-600">거래 내역이 없습니다</p>
+            ) : (
+              <div className="space-y-2">
+                {recentTrades.map(l => {
+                  const isBuy  = l.msg.includes('매수 완료');
+                  const nameM  = l.msg.match(/\[(.+?)\]/);
+                  const priceM = l.msg.match(/@ ([\d,]+)원/);
+                  const pctM   = l.msg.match(/([\+\-][\d.]+)%/);
+                  return (
+                    <div key={l.id} className={`flex items-start gap-2 p-1.5 rounded-lg border text-[10px] ${isBuy ? 'bg-emerald-950/40 border-emerald-800' : 'bg-rose-950/40 border-rose-800'}`}>
+                      <span className={`font-bold shrink-0 mt-0.5 ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {isBuy ? '▲' : '▼'}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`font-bold ${isBuy ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            {isBuy ? '매수' : '매도'}
+                          </span>
+                          {nameM && <span className="text-slate-200 truncate">{nameM[1]}</span>}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-400 font-mono">
+                          {priceM && <span>{priceM[1]}원</span>}
+                          {pctM && <span className={pctM[1].startsWith('+') ? 'text-rose-400' : 'text-blue-400'}>{pctM[1]}%</span>}
+                          <span className="text-slate-600">{l.time}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 코스피 TOP 10 감시 테이블 */}
+        {/* ── 감시 종목 테이블 ── */}
         <div className="rounded-xl border border-slate-700 overflow-hidden">
-          <div className="bg-slate-900 px-3 py-2 text-[10px] font-bold text-slate-400 border-b border-slate-700">
-            코스피 TOP 10 감시 목록
+          <div className="bg-slate-900 px-3 py-2 flex items-center justify-between border-b border-slate-700">
+            <span className="text-[10px] font-bold text-slate-300">코스피 TOP 10 감시 목록</span>
+            <span className="text-[9px] text-slate-500">Ross Cameron MACD+RSI · 6점+ 매수</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-[10px]">
@@ -2884,17 +3000,19 @@ if __name__ == "__main__":
                   <th className="text-center px-3 py-2">신호</th>
                   <th className="text-center px-3 py-2">점수</th>
                   <th className="text-right px-3 py-2">RSI</th>
-                  <th className="text-left px-3 py-2">포지션</th>
+                  <th className="text-left px-3 py-2">포지션 / 손익</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {KOSPI_TOP10.map(({ code, name }) => {
-                  const w = autoWatchMap[code];
-                  const pos = w?.position ?? null;
+                  const w      = autoWatchMap[code];
+                  const pos    = w?.position ?? null;
                   const signal = w?.signal ?? '관망';
+                  const pnlPct = pos && w?.price ? ((w.price - pos.avgPrice) / pos.avgPrice * 100) : null;
+                  const isAlert = signal === '매수후보' || signal === '위험';
                   return (
-                    <tr key={code} className="border-t border-slate-800 hover:bg-slate-900/50 transition-colors">
+                    <tr key={code} className={`border-t border-slate-800 transition-colors ${isAlert ? 'bg-slate-900/80' : 'hover:bg-slate-900/40'}`}>
                       <td className="px-3 py-2">
                         <div className="font-bold text-slate-200">{name}</div>
                         <div className="text-slate-600 font-mono">{code}</div>
@@ -2911,19 +3029,28 @@ if __name__ == "__main__":
                           {signal}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-center text-slate-400 font-mono">
-                        {w ? `${w.score}/8` : '—'}
+                      <td className="px-3 py-2 text-center font-mono">
+                        {w ? (
+                          <span className={w.score >= 6 ? 'text-emerald-400 font-bold' : w.score >= 4 ? 'text-amber-400' : 'text-slate-500'}>
+                            {w.score}/8
+                          </span>
+                        ) : <span className="text-slate-600">—</span>}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-400">
-                        {w ? w.rsi.toFixed(1) : '—'}
+                      <td className="px-3 py-2 text-right font-mono">
+                        {w ? (
+                          <span className={w.rsi >= 50 && w.rsi <= 70 ? 'text-emerald-400' : w.rsi > 70 ? 'text-rose-400' : 'text-slate-400'}>
+                            {w.rsi.toFixed(1)}
+                          </span>
+                        ) : <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-3 py-2">
                         {pos ? (
-                          <div className="text-emerald-400 font-mono">
-                            <div>{pos.qty}주 @{pos.avgPrice.toLocaleString()}</div>
-                            {w?.price && (
-                              <div className={w.price >= pos.avgPrice ? 'text-emerald-300' : 'text-rose-300'}>
-                                {w.price >= pos.avgPrice ? '+' : ''}{((w.price - pos.avgPrice) / pos.avgPrice * 100).toFixed(1)}%
+                          <div className="font-mono">
+                            <div className="text-slate-200">{pos.qty}주 @{pos.avgPrice.toLocaleString()}</div>
+                            {pnlPct !== null && (
+                              <div className={`font-bold ${pnlPct >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                                {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                                {w?.price && <span className="text-slate-500 font-normal ml-1">({((w.price - pos.avgPrice) * pos.qty >= 0 ? '+' : '')}{((w.price - pos.avgPrice) * pos.qty).toLocaleString()}원)</span>}
                               </div>
                             )}
                           </div>
@@ -2972,34 +3099,50 @@ if __name__ == "__main__":
           </div>
         </div>
 
-        {/* 장 시간 자동 스케줄러 */}
-        <div className={`p-3 rounded-xl border ${autoScheduleEnabled ? 'border-indigo-600 bg-indigo-950/25' : 'border-slate-700 bg-slate-900'}`}>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <Clock className="h-3.5 w-3.5 text-indigo-400" />
-              <span className="text-[11px] font-bold text-slate-200">장 시간 자동 스케줄</span>
-              <span className="text-[9px] text-slate-500">09:00–15:30 KST</span>
-            </div>
-            <button
-              onClick={toggleScheduler}
-              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${autoScheduleEnabled ? 'bg-indigo-700 hover:bg-indigo-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
-            >
-              {autoScheduleEnabled ? '스케줄 OFF' : '스케줄 ON'}
-            </button>
+        {/* ── 설정 + 스케줄러 ── */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <label className="block text-[10px] font-bold text-slate-400">1회 주문수량 (주)</label>
+            <input
+              type="number" min="1" value={autoOrderQty}
+              onChange={e => setAutoOrderQty(e.target.value)}
+              disabled={autoEnabled}
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
+            />
+            <label className="block text-[10px] font-bold text-slate-400">조회주기 (초)</label>
+            <input
+              type="number" min="10" max="300" value={autoCheckInterval}
+              onChange={e => setAutoCheckInterval(parseInt(e.target.value) || 30)}
+              disabled={autoEnabled}
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50"
+            />
           </div>
-          {autoScheduleEnabled && (
-            <div className="flex items-center gap-2 text-[10px]">
-              {schedulerStatus === 'active'  && <><span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /><span className="text-emerald-400">장 중 — 자동매매 활성</span></>}
-              {schedulerStatus === 'waiting' && <><span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse inline-block" /><span className="text-amber-400">대기 중 — {nextMarketEventKST()}</span></>}
-              {schedulerStatus === 'closed'  && <><span className="h-2 w-2 rounded-full bg-slate-500 inline-block" /><span className="text-slate-400">장 마감 — {nextMarketEventKST()}</span></>}
+          <div className={`p-3 rounded-xl border ${autoScheduleEnabled ? 'border-indigo-600 bg-indigo-950/25' : 'border-slate-700 bg-slate-900'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1.5">
+                <Clock className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="text-[10px] font-bold text-slate-200">장 시간 스케줄</span>
+              </div>
+              <button
+                onClick={toggleScheduler}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${autoScheduleEnabled ? 'bg-indigo-700 hover:bg-indigo-600 text-white' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}
+              >
+                {autoScheduleEnabled ? '스케줄 OFF' : '스케줄 ON'}
+              </button>
             </div>
-          )}
-          {!autoScheduleEnabled && (
-            <p className="text-[9px] text-slate-500">활성화하면 KIS 모의투자를 09:00에 자동 연결하고 코스피 TOP 10 자동매매를 시작합니다. 15:30 장 마감 시 자동 중지.</p>
-          )}
+            {autoScheduleEnabled ? (
+              <div className="flex items-center gap-1.5 text-[10px]">
+                {schedulerStatus === 'active'  && <><span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" /><span className="text-emerald-400">장 중 — 자동매매 활성</span></>}
+                {schedulerStatus === 'waiting' && <><span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" /><span className="text-amber-400">대기 — {nextMarketEventKST()}</span></>}
+                {schedulerStatus === 'closed'  && <><span className="h-1.5 w-1.5 rounded-full bg-slate-500" /><span className="text-slate-400">장 마감 — {nextMarketEventKST()}</span></>}
+              </div>
+            ) : (
+              <p className="text-[9px] text-slate-500">09:00 자동 시작 · 15:30 자동 중지</p>
+            )}
+          </div>
         </div>
 
-        {/* 시작 / 중지 버튼 */}
+        {/* ── 시작 / 중지 ── */}
         {!autoEnabled ? (
           <button
             onClick={startAutoTrade}
@@ -3019,17 +3162,36 @@ if __name__ == "__main__":
           </button>
         )}
 
-        {/* 로그 */}
+        {connStatus !== 'connected' && (
+          <div className="p-2 bg-amber-900/60 border border-amber-700 rounded-lg text-[10px] text-amber-100 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            KIS에 먼저 연결하세요 (모의투자 권장).
+          </div>
+        )}
+
+        {/* ── 로그 ── */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] font-bold text-slate-400">실행 로그</span>
-            <button onClick={() => setAutoLogs([])} className="text-[9px] text-slate-600 hover:text-slate-400 cursor-pointer">지우기</button>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-md overflow-hidden border border-slate-700 text-[9px]">
+                <button
+                  onClick={() => setAutoLogFilter('all')}
+                  className={`px-2 py-0.5 cursor-pointer transition ${autoLogFilter === 'all' ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                >전체</button>
+                <button
+                  onClick={() => setAutoLogFilter('trade')}
+                  className={`px-2 py-0.5 cursor-pointer transition ${autoLogFilter === 'trade' ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                >매매만</button>
+              </div>
+              <button onClick={() => setAutoLogs([])} className="text-[9px] text-slate-600 hover:text-slate-400 cursor-pointer">지우기</button>
+            </div>
           </div>
           <div className="h-52 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2 space-y-0.5 font-mono text-[10px]">
-            {autoLogs.length === 0
-              ? <p className="text-slate-600 p-2">자동매매를 시작하면 로그가 표시됩니다.</p>
-              : autoLogs.map(l => (
-                  <div key={l.id} className="flex gap-2">
+            {filteredLogs.length === 0
+              ? <p className="text-slate-600 p-2">{autoLogFilter === 'trade' ? '매매 내역이 없습니다.' : '자동매매를 시작하면 로그가 표시됩니다.'}</p>
+              : filteredLogs.map(l => (
+                  <div key={l.id} className={`flex gap-2 py-0.5 ${(l.type === 'buy' || l.type === 'sell' || l.type === 'success') ? 'bg-slate-900/50 rounded px-1' : ''}`}>
                     <span className="text-slate-600 shrink-0">{l.time}</span>
                     <span className={logColor[l.type] ?? 'text-slate-400'}>{l.msg}</span>
                   </div>
@@ -3037,13 +3199,6 @@ if __name__ == "__main__":
             }
           </div>
         </div>
-
-        {connStatus !== 'connected' && (
-          <div className="p-2 bg-amber-900 border border-amber-700 rounded-lg text-[10px] text-amber-100 flex items-center gap-2">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            KIS에 먼저 연결하세요 (모의투자 권장).
-          </div>
-        )}
       </div>
     );
   };
@@ -3053,28 +3208,31 @@ if __name__ == "__main__":
   // ═══════════════════════════════════════════════════════════════════════════
 
   const renderTossAutoTrade = () => {
-    const signalColor: Record<SignalClass, string> = {
-      '매수후보': 'text-emerald-300 border-emerald-500 bg-emerald-900',
-      '관심':    'text-blue-200 border-blue-500 bg-blue-900',
-      '관망':    'text-slate-300 border-slate-600 bg-slate-800',
-      '위험':    'text-rose-200 border-rose-500 bg-rose-900',
-    };
-    const logColor: Record<string, string> = {
-      buy: 'text-emerald-400', sell: 'text-rose-400',
-      success: 'text-emerald-300', error: 'text-red-400',
-      warning: 'text-amber-400', info: 'text-slate-400',
-    };
-
-    const tossTradeMarkers: TradeMarker[] = tossAutoLogs
-      .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
-      .map(l => {
-        const priceMatch = l.msg.match(/@ ([\d,]+)원/);
-        const price = priceMatch ? parseInt(priceMatch[1].replace(/,/g, '')) : 0;
-        const [h, m, s] = l.time.split(':').map(Number);
-        const d = new Date(); d.setHours(h, m, s, 0);
-        return { timestamp: d.getTime(), type: l.msg.includes('매수') ? 'BUY' as const : 'SELL' as const, price };
+    // ─── 파생 데이터 계산 ────────────────────────────────────────────
+    const tossHoldings = KOSPI_TOP10
+      .map(({ code, name }) => {
+        const w = tossAutoWatchMap[code];
+        if (!w?.position) return null;
+        const pnl    = w.price ? (w.price - w.position.avgPrice) * w.position.qty : 0;
+        const pnlPct = w.price ? ((w.price - w.position.avgPrice) / w.position.avgPrice * 100) : 0;
+        return { code, name, position: w.position, price: w.price, pnl, pnlPct, signal: w.signal };
       })
-      .filter(m => m.price > 0);
+      .filter((h): h is NonNullable<typeof h> => h !== null);
+
+    const tossTotalInvested = tossHoldings.reduce((sum, h) => sum + h.position.avgPrice * h.position.qty, 0);
+    const tossTotalPnl      = tossHoldings.reduce((sum, h) => sum + h.pnl, 0);
+    const tossTotalPnlPct   = tossTotalInvested > 0 ? (tossTotalPnl / tossTotalInvested * 100) : 0;
+
+    const tossRecentTrades = tossAutoLogs
+      .filter(l => l.type === 'success' && (l.msg.includes('매수 완료') || l.msg.includes('매도 완료')))
+      .slice(0, 6);
+
+    const tossBuyAlerts  = KOSPI_TOP10.filter(({ code }) => tossAutoWatchMap[code]?.signal === '매수후보');
+    const tossSellAlerts = KOSPI_TOP10.filter(({ code }) => tossAutoWatchMap[code]?.signal === '위험');
+
+    const tossFilteredLogs = tossAutoLogFilter === 'trade'
+      ? tossAutoLogs.filter(l => ['buy','sell','success'].includes(l.type))
+      : tossAutoLogs;
 
     const signalBadge: Record<SignalClass, string> = {
       '매수후보': 'bg-emerald-900 text-emerald-300 border border-emerald-600',
@@ -3082,41 +3240,132 @@ if __name__ == "__main__":
       '관망':    'bg-slate-800 text-slate-400 border border-slate-600',
       '위험':    'bg-rose-900 text-rose-300 border border-rose-600',
     };
-
-    const tossWatchValues = Object.values(tossAutoWatchMap) as SymbolWatchState[];
-    const holdingCount = tossWatchValues.filter(w => w?.position).length;
+    const logColor: Record<string, string> = {
+      buy: 'text-emerald-400', sell: 'text-rose-400',
+      success: 'text-emerald-300', error: 'text-red-400',
+      warning: 'text-amber-400', info: 'text-slate-400',
+    };
 
     return (
-      <div className="space-y-4">
-        {/* 상태 배너 */}
-        {tossAutoEnabled && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-blue-950/40 border border-blue-700/50 rounded-xl text-[11px]">
-            <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
-            <span className="text-blue-200 font-bold">코스피 TOP 10 감시 중</span>
-            <span className="text-blue-400 font-mono">· {tossAutoCheckInterval}s</span>
-            {holdingCount > 0 && <span className="ml-auto text-emerald-300 font-bold">{holdingCount}종목 보유</span>}
+      <div className="space-y-3">
+
+        {/* ── 상태 배너 ── */}
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] ${tossAutoEnabled ? 'bg-blue-950/40 border-blue-700/50' : 'bg-slate-900 border-slate-700'}`}>
+          {tossAutoEnabled
+            ? <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse shrink-0" />
+            : <span className="h-2 w-2 rounded-full bg-slate-600 shrink-0" />}
+          <span className={`font-bold ${tossAutoEnabled ? 'text-blue-200' : 'text-slate-400'}`}>
+            {tossAutoEnabled ? '코스피 TOP 10 감시 중' : '대기 중'}
+          </span>
+          {tossAutoEnabled && <span className="text-slate-400 font-mono">· {tossAutoCheckInterval}s 주기</span>}
+          {tossAutoLastCheckTime && <span className="text-slate-500 font-mono text-[10px]">· 마지막: {tossAutoLastCheckTime}</span>}
+          {tossHoldings.length > 0 && (
+            <span className="ml-auto font-bold text-emerald-300">{tossHoldings.length}종목 보유</span>
+          )}
+        </div>
+
+        {/* ── 신호 알림 ── */}
+        {(tossBuyAlerts.length > 0 || tossSellAlerts.length > 0) && (
+          <div className="flex flex-wrap gap-2">
+            {tossBuyAlerts.map(({ code, name }) => (
+              <div key={code} className="flex items-center gap-1.5 px-2 py-1 bg-emerald-950 border border-emerald-600 rounded-lg text-[10px] animate-pulse">
+                <span className="text-emerald-400 font-bold">▲ 매수후보</span>
+                <span className="text-emerald-200 font-bold">{name}</span>
+                <span className="text-emerald-500 font-mono">{tossAutoWatchMap[code]?.price?.toLocaleString()}원</span>
+              </div>
+            ))}
+            {tossSellAlerts.map(({ code, name }) => (
+              <div key={code} className="flex items-center gap-1.5 px-2 py-1 bg-rose-950 border border-rose-600 rounded-lg text-[10px] animate-pulse">
+                <span className="text-rose-400 font-bold">▼ 위험</span>
+                <span className="text-rose-200 font-bold">{name}</span>
+                <span className="text-rose-500 font-mono">{tossAutoWatchMap[code]?.price?.toLocaleString()}원</span>
+              </div>
+            ))}
           </div>
         )}
 
-        {/* 파라미터 */}
+        {/* ── 포트폴리오 + 최근 매매 ── */}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 mb-1">1회 주문수량 (주)</label>
-            <input type="number" min="1" value={tossAutoOrderQty}
-              onChange={e => setTossAutoOrderQty(e.target.value)} disabled={tossAutoEnabled}
-              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 space-y-2">
+            <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1.5">
+              <span>포트폴리오</span>
+              {tossHoldings.length > 0 && <span className="text-slate-500">({tossHoldings.length}종목)</span>}
+            </div>
+            {tossHoldings.length === 0 ? (
+              <p className="text-[10px] text-slate-600">보유 포지션 없음</p>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  {tossHoldings.map(h => (
+                    <div key={h.code} className="flex items-center justify-between text-[10px]">
+                      <span className="text-slate-300 font-bold truncate max-w-[80px]">{h.name}</span>
+                      <span className={`font-mono font-bold ${h.pnlPct >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                        {h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="border-t border-slate-700 pt-2 space-y-0.5">
+                  <div className="flex justify-between text-[10px]">
+                    <span className="text-slate-500">총 투자</span>
+                    <span className="text-slate-300 font-mono">{tossTotalInvested.toLocaleString()}원</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] font-bold">
+                    <span className="text-slate-400">평가손익</span>
+                    <span className={`font-mono ${tossTotalPnl >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                      {tossTotalPnl >= 0 ? '+' : ''}{tossTotalPnl.toLocaleString()}원
+                      <span className="text-[9px] ml-1">({tossTotalPnlPct >= 0 ? '+' : ''}{tossTotalPnlPct.toFixed(1)}%)</span>
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
-            <input type="number" min="10" max="300" value={tossAutoCheckInterval}
-              onChange={e => setTossAutoCheckInterval(parseInt(e.target.value) || 30)} disabled={tossAutoEnabled}
-              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
+
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-3">
+            <div className="text-[10px] font-bold text-slate-400 mb-2">최근 매매</div>
+            {tossRecentTrades.length === 0 ? (
+              <p className="text-[10px] text-slate-600">거래 내역이 없습니다</p>
+            ) : (
+              <div className="space-y-2">
+                {tossRecentTrades.map(l => {
+                  const isBuy  = l.msg.includes('매수 완료');
+                  const nameM  = l.msg.match(/\[(.+?)\]/);
+                  const priceM = l.msg.match(/@ ([\d,]+)원/);
+                  const pctM   = l.msg.match(/([\+\-][\d.]+)%/);
+                  return (
+                    <div key={l.id} className={`flex items-start gap-2 p-1.5 rounded-lg border text-[10px] ${isBuy ? 'bg-emerald-950/40 border-emerald-800' : 'bg-rose-950/40 border-rose-800'}`}>
+                      <span className={`font-bold shrink-0 mt-0.5 ${isBuy ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {isBuy ? '▲' : '▼'}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`font-bold ${isBuy ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            {isBuy ? '매수' : '매도'}
+                          </span>
+                          {nameM && <span className="text-slate-200 truncate">{nameM[1]}</span>}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-400 font-mono">
+                          {priceM && <span>{priceM[1]}원</span>}
+                          {pctM && <span className={pctM[1].startsWith('+') ? 'text-rose-400' : 'text-blue-400'}>{pctM[1]}%</span>}
+                          <span className="text-slate-600">{l.time}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 감시 종목 테이블 */}
+        {/* ── 감시 종목 테이블 ── */}
         <div className="rounded-xl overflow-hidden border border-slate-700">
-          <table className="w-full text-[11px]">
+          <div className="bg-slate-900 px-3 py-2 flex items-center justify-between border-b border-slate-700">
+            <span className="text-[10px] font-bold text-slate-300">코스피 TOP 10 감시 목록</span>
+            <span className="text-[9px] text-slate-500">Ross Cameron MACD+RSI · 6점+ 매수</span>
+          </div>
+          <table className="w-full text-[10px]">
             <thead>
               <tr className="bg-slate-950 text-slate-500 text-[9px]">
                 <th className="text-left px-3 py-2">종목</th>
@@ -3124,52 +3373,55 @@ if __name__ == "__main__":
                 <th className="text-center px-3 py-2">신호</th>
                 <th className="text-center px-3 py-2">점수</th>
                 <th className="text-right px-3 py-2">RSI</th>
-                <th className="text-left px-3 py-2">포지션</th>
+                <th className="text-left px-3 py-2">포지션 / 손익</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {KOSPI_TOP10.map(({ code, name }) => {
-                const w = tossAutoWatchMap[code];
-                const pos = w?.position ?? null;
+                const w      = tossAutoWatchMap[code];
+                const pos    = w?.position ?? null;
                 const signal = w?.signal ?? '관망';
+                const pnlPct = pos && w?.price ? ((w.price - pos.avgPrice) / pos.avgPrice * 100) : null;
+                const isAlert = signal === '매수후보' || signal === '위험';
                 return (
-                  <tr key={code} className="border-t border-slate-800 hover:bg-slate-900/50 transition-colors">
+                  <tr key={code} className={`border-t border-slate-800 transition-colors ${isAlert ? 'bg-slate-900/80' : 'hover:bg-slate-900/40'}`}>
                     <td className="px-3 py-2">
                       <div className="font-bold text-slate-200">{name}</div>
                       <div className="text-slate-600 font-mono">{code}</div>
                     </td>
                     <td className="px-3 py-2 text-right font-mono">
-                      {w?.price ? (
-                        <span className="text-slate-100 font-bold">{w.price.toLocaleString()}원</span>
-                      ) : (
-                        <span className="text-slate-600">—</span>
-                      )}
+                      {w?.price ? <span className="text-slate-100 font-bold">{w.price.toLocaleString()}원</span> : <span className="text-slate-600">—</span>}
                     </td>
                     <td className="px-3 py-2 text-center">
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${signalBadge[signal]}`}>
-                        {signal}
-                      </span>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${signalBadge[signal]}`}>{signal}</span>
                     </td>
-                    <td className="px-3 py-2 text-center text-slate-400 font-mono">
-                      {w ? `${w.score}/8` : '—'}
+                    <td className="px-3 py-2 text-center font-mono">
+                      {w ? (
+                        <span className={w.score >= 6 ? 'text-emerald-400 font-bold' : w.score >= 4 ? 'text-amber-400' : 'text-slate-500'}>
+                          {w.score}/8
+                        </span>
+                      ) : <span className="text-slate-600">—</span>}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-400">
-                      {w ? w.rsi.toFixed(1) : '—'}
+                    <td className="px-3 py-2 text-right font-mono">
+                      {w ? (
+                        <span className={w.rsi >= 50 && w.rsi <= 70 ? 'text-emerald-400' : w.rsi > 70 ? 'text-rose-400' : 'text-slate-400'}>
+                          {w.rsi.toFixed(1)}
+                        </span>
+                      ) : <span className="text-slate-600">—</span>}
                     </td>
                     <td className="px-3 py-2">
                       {pos ? (
-                        <div className="text-emerald-400 font-mono">
-                          <div>{pos.qty}주 @{pos.avgPrice.toLocaleString()}</div>
-                          {w?.price && (
-                            <div className={w.price >= pos.avgPrice ? 'text-emerald-300' : 'text-rose-300'}>
-                              {w.price >= pos.avgPrice ? '+' : ''}{((w.price - pos.avgPrice) / pos.avgPrice * 100).toFixed(1)}%
+                        <div className="font-mono">
+                          <div className="text-slate-200">{pos.qty}주 @{pos.avgPrice.toLocaleString()}</div>
+                          {pnlPct !== null && (
+                            <div className={`font-bold ${pnlPct >= 0 ? 'text-rose-400' : 'text-blue-400'}`}>
+                              {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                              {w?.price && <span className="text-slate-500 font-normal ml-1">({((w.price - pos.avgPrice) * pos.qty >= 0 ? '+' : '')}{((w.price - pos.avgPrice) * pos.qty).toLocaleString()}원)</span>}
                             </div>
                           )}
                         </div>
-                      ) : (
-                        <span className="text-slate-600">—</span>
-                      )}
+                      ) : <span className="text-slate-600">—</span>}
                     </td>
                     <td className="px-3 py-2">
                       {pos && tossAutoEnabled && tossAccountSeq != null && (
@@ -3208,6 +3460,23 @@ if __name__ == "__main__":
           </table>
         </div>
 
+        {/* ── 설정 ── */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">1회 주문수량 (주)</label>
+            <input type="number" min="1" value={tossAutoOrderQty}
+              onChange={e => setTossAutoOrderQty(e.target.value)} disabled={tossAutoEnabled}
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-400 mb-1">조회주기 (초)</label>
+            <input type="number" min="10" max="300" value={tossAutoCheckInterval}
+              onChange={e => setTossAutoCheckInterval(parseInt(e.target.value) || 30)} disabled={tossAutoEnabled}
+              className="w-full bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-xs font-mono text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb] disabled:opacity-50" />
+          </div>
+        </div>
+
+        {/* ── 시작 / 중지 ── */}
         {!tossAutoEnabled ? (
           <button onClick={startTossAutoTrade}
             disabled={tossConnStatus !== 'connected' || tossAutoLoadingCandles}
@@ -3223,16 +3492,36 @@ if __name__ == "__main__":
           </button>
         )}
 
+        {tossConnStatus !== 'connected' && (
+          <div className="p-2 bg-amber-900/60 border border-amber-700 rounded-lg text-[10px] text-amber-100 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            토스증권에 먼저 연결하세요.
+          </div>
+        )}
+
+        {/* ── 로그 ── */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] font-bold text-slate-400">실행 로그</span>
-            <button onClick={() => setTossAutoLogs([])} className="text-[9px] text-slate-600 hover:text-slate-400 cursor-pointer">지우기</button>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-md overflow-hidden border border-slate-700 text-[9px]">
+                <button
+                  onClick={() => setTossAutoLogFilter('all')}
+                  className={`px-2 py-0.5 cursor-pointer transition ${tossAutoLogFilter === 'all' ? 'bg-slate-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                >전체</button>
+                <button
+                  onClick={() => setTossAutoLogFilter('trade')}
+                  className={`px-2 py-0.5 cursor-pointer transition ${tossAutoLogFilter === 'trade' ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}
+                >매매만</button>
+              </div>
+              <button onClick={() => setTossAutoLogs([])} className="text-[9px] text-slate-600 hover:text-slate-400 cursor-pointer">지우기</button>
+            </div>
           </div>
           <div className="h-52 overflow-y-auto bg-slate-950 border border-slate-800 rounded-xl p-2 space-y-0.5 font-mono text-[10px]">
-            {tossAutoLogs.length === 0
-              ? <p className="text-slate-600 p-2">자동매매를 시작하면 로그가 표시됩니다.</p>
-              : tossAutoLogs.map(l => (
-                  <div key={l.id} className="flex gap-2">
+            {tossFilteredLogs.length === 0
+              ? <p className="text-slate-600 p-2">{tossAutoLogFilter === 'trade' ? '매매 내역이 없습니다.' : '자동매매를 시작하면 로그가 표시됩니다.'}</p>
+              : tossFilteredLogs.map(l => (
+                  <div key={l.id} className={`flex gap-2 py-0.5 ${(l.type === 'buy' || l.type === 'sell' || l.type === 'success') ? 'bg-slate-900/50 rounded px-1' : ''}`}>
                     <span className="text-slate-600 shrink-0">{l.time}</span>
                     <span className={logColor[l.type] ?? 'text-slate-400'}>{l.msg}</span>
                   </div>
@@ -3240,13 +3529,6 @@ if __name__ == "__main__":
             }
           </div>
         </div>
-
-        {tossConnStatus !== 'connected' && (
-          <div className="p-2 bg-amber-900 border border-amber-700 rounded-lg text-[10px] text-amber-100 flex items-center gap-2">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            토스증권에 먼저 연결하세요.
-          </div>
-        )}
       </div>
     );
   };
