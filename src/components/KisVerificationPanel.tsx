@@ -973,8 +973,8 @@ export default function KisVerificationPanel() {
       if (!tokenOk) { addAutoLog('유효한 토큰 없음 — 다음 주기에 재시도', 'warning'); return; }
 
       // 0-b. 새 거래일 캔들 갱신 (KST 기준 날짜 변경 감지)
-      const todayKst = new Date().toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })
-        .replace(/\. /g, '').replace('.', '');  // e.g. "20260705"
+      const _kst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+      const todayKst = `${_kst.getFullYear()}${String(_kst.getMonth() + 1).padStart(2, '0')}${String(_kst.getDate()).padStart(2, '0')}`;
       if (autoLastCandleDayRef.current && autoLastCandleDayRef.current !== todayKst) {
         addAutoLog(`새 거래일 감지 (${autoLastCandleDayRef.current}→${todayKst}) — 캔들 갱신 중…`, 'info');
         try { await loadAutoCandles(); addAutoLog('캔들 갱신 완료', 'success'); }
@@ -1074,8 +1074,16 @@ export default function KisVerificationPanel() {
         hasBearishDiv   ? '⚠다이버전스' : null,
       ].filter(Boolean).join(' ');
 
+      // 매수후보 미달 시 부족한 조건 표시
+      const lacking: string[] = [];
+      if (signal !== '매수후보' && signal !== '위험') {
+        if (!isGoldenCross) lacking.push('골든크로스 없음');
+        if (!rsiPrime)      lacking.push(`RSI ${currRsi.toFixed(0)} (필요: 50-70)`);
+        if (buyScore < 6)   lacking.push(`점수 ${buyScore}/6 미달`);
+      }
+
       addAutoLog(
-        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8${flags ? ' · ' + flags : ''})`,
+        `[${signal}] ${currentPrice.toLocaleString()}원 | RSI:${currRsi.toFixed(1)} MACD:${currMacd.toFixed(2)} (${buyScore}/8${flags ? ' · ' + flags : ''})${lacking.length ? '  ⚑ ' + lacking.join(' / ') : ''}`,
         signal === '매수후보' ? 'buy' : signal === '위험' ? 'sell' : 'info',
       );
 
