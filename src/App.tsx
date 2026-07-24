@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LayoutDashboard, ShieldCheck, BarChart3, Activity, Code2,
+  LayoutDashboard, ShieldCheck, BarChart3, Activity, Code2, Layers,
   TrendingUp, TrendingDown, Minus, RefreshCw, Clock,
 } from 'lucide-react';
 import { BotConfig } from './types';
 import DashboardPanel from './components/DashboardPanel';
 import TradingSimulator from './components/TradingSimulator';
 import BacktestPanel from './components/BacktestPanel';
+import ElephantPanel from './components/ElephantPanel';
 import InteractiveCodeViewer from './components/InteractiveCodeViewer';
 import SetupGuide from './components/SetupGuide';
 import KisVerificationPanel from './components/KisVerificationPanel';
@@ -19,7 +20,7 @@ import { Label } from './components/ui/label';
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/card';
 import { cn } from './lib/utils';
 
-type Tab = 'dashboard' | 'broker' | 'backtest' | 'simulator' | 'reference';
+type Tab = 'dashboard' | 'broker' | 'backtest' | 'elephant' | 'simulator' | 'reference';
 
 // ── Market Status Bar ─────────────────────────────────────────────────────────
 interface IndexData {
@@ -160,6 +161,7 @@ const TABS: { id: Tab; icon: React.ReactNode; label: string; sub: string }[] = [
   { id: 'dashboard',  icon: <LayoutDashboard className="h-4 w-4" />, label: '대시보드',    sub: '핵심 현황' },
   { id: 'broker',     icon: <ShieldCheck className="h-4 w-4" />,     label: '자동매매 연동', sub: 'KIS·Toss·키움' },
   { id: 'backtest',   icon: <BarChart3 className="h-4 w-4" />,       label: '백테스트',    sub: '과거 검증' },
+  { id: 'elephant',   icon: <Layers className="h-4 w-4" />,          label: '엘리펀트',    sub: '장대캔들 5분봉' },
   { id: 'simulator',  icon: <Activity className="h-4 w-4" />,        label: '시뮬레이터',  sub: '가상 매매' },
   { id: 'reference',  icon: <Code2 className="h-4 w-4" />,           label: '코드·가이드', sub: '개발 참고' },
 ];
@@ -294,6 +296,11 @@ export default function App() {
         {/* Dashboard: full-width */}
         {activeTab === 'dashboard' && (
           <DashboardPanel />
+        )}
+
+        {/* Elephant: full-width (자체 설정 사이드바 포함) */}
+        {activeTab === 'elephant' && (
+          <ElephantPanel />
         )}
 
         {/* Backtest / Simulator: sidebar + content */}
