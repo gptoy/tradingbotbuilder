@@ -910,7 +910,7 @@ export default function TradingSimulator({ config }: Props) {
       </div>
 
       {/* ── 메인 그리드 ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-white p-6 rounded-2xl border border-[#e5e5e5]">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-card p-6 rounded-2xl border border-border">
         {/* 왼쪽: 컨트롤 + 포트폴리오 */}
         <div className="lg:col-span-1 flex flex-col space-y-4">
           {/* 헤더 + 데이터 소스 배지 */}
@@ -1301,16 +1301,16 @@ export default function TradingSimulator({ config }: Props) {
               </div>
             </div>
             <div className="space-y-2">
-              <div className="bg-white rounded-xl p-2 border border-[#e5e5e5]">
+              <div className="bg-card rounded-xl p-2 border border-border">
                 {renderSVGChart()}
               </div>
-              <div className="bg-white rounded-xl p-2 border border-[#e5e5e5]">
+              <div className="bg-card rounded-xl p-2 border border-border">
                 {renderSVGMACD()}
               </div>
-              <div className="bg-white rounded-xl p-2 border border-[#e5e5e5]">
+              <div className="bg-card rounded-xl p-2 border border-border">
                 {renderSVGRSI()}
               </div>
-              <div className="bg-white rounded-xl p-2 border border-[#e5e5e5]">
+              <div className="bg-card rounded-xl p-2 border border-border">
                 {renderSVGPnL()}
               </div>
             </div>

@@ -8,26 +8,26 @@
 
 /* ── Dub color & design tokens (Tailwind v4) ─────────────────────────────── */
 @theme {
-  /* ── Color palette ────────────────────────────────────────────────────── */
-  --color-canvas-white:       #ffffff;
-  --color-paper-mist:         #f5f5f5;
-  --color-ash:                #e5e5e5;
-  --color-smoke:              #d4d4d4;
-  --color-pebble:             #c8c8c8;
-  --color-midnight-ink:       #0a0a0a;
-  --color-charcoal:           #171717;
-  --color-graphite:           #262626;
-  --color-slate-dub:          #404040;
-  --color-steel:              #525252;
-  --color-fog:                #737373;
-  --color-silver:             #a3a3a3;
-  --color-electric-blue:      #2563eb;
-  --color-deep-sapphire:      #1e40af;
-  --color-soft-mint:          #dcfce7;
-  --color-vivid-green:        #16a34a;
-  --color-tangerine:          #ea580c;
+  /* ── Securities dark navy palette ──────────────────────────────────────── */
+  --color-canvas-white:       #152e48;   /* navy card surface */
+  --color-paper-mist:         #11243c;   /* secondary surface */
+  --color-ash:                #1e3a58;   /* border */
+  --color-smoke:              #264562;
+  --color-pebble:             #344e72;
+  --color-midnight-ink:       #ecf5ff;   /* primary text */
+  --color-charcoal:           #d0e6f8;
+  --color-graphite:           #acc8e0;
+  --color-slate-dub:          #88aace;
+  --color-steel:              #7298c0;
+  --color-fog:                #80acd0;
+  --color-silver:             #80acd0;
+  --color-electric-blue:      #1d6ef8;   /* securities accent blue */
+  --color-deep-sapphire:      #1252c9;
+  --color-soft-mint:          #002040;
+  --color-vivid-green:        #00cc96;   /* signal green */
+  --color-tangerine:          #f59e0b;
   --color-lavender:           #7c3aed;
-  --color-primary-action:     #000000;
+  --color-primary-action:     #ecf5ff;
 
   /* ── shadcn/ui semantic colors → Dub values ──────────────────────────── */
   --color-background:           var(--background);
@@ -79,68 +79,54 @@
   --font-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* ── Dub semantic color tokens ───────────────────────────────────────────── */
+/* ── Securities dark navy theme ──────────────────────────────────────────── */
 :root {
-  /* Page canvas — pure white */
-  --background:             #ffffff;
-  --foreground:             #171717;    /* Charcoal */
+  /* Page canvas — deep navy */
+  --background:             #0e1f34;
+  --foreground:             #ecf5ff;
 
-  /* Card surfaces — white-on-white separated by 1px ash border */
-  --card:                   #ffffff;
-  --card-foreground:        #171717;
+  /* Card surfaces — navy lifted */
+  --card:                   #152e48;
+  --card-foreground:        #ecf5ff;
 
   /* Popover */
-  --popover:                #ffffff;
-  --popover-foreground:     #171717;
+  --popover:                #162e48;
+  --popover-foreground:     #ecf5ff;
 
-  /* Primary action — near-black (Dub's committed CTA fill) */
-  --primary:                #0a0a0a;   /* Midnight Ink */
+  /* Primary action — securities blue */
+  --primary:                #1d6ef8;
   --primary-foreground:     #ffffff;
 
-  /* Secondary / alt surface — Paper Mist */
-  --secondary:              #f5f5f5;
-  --secondary-foreground:   #171717;
+  /* Secondary surface */
+  --secondary:              #11243c;
+  --secondary-foreground:   #ecf5ff;
 
-  /* Muted — Paper Mist */
-  --muted:                  #f5f5f5;
-  --muted-foreground:       #737373;   /* Fog */
+  /* Muted */
+  --muted:                  #11243c;
+  --muted-foreground:       #80acd0;
 
-  /* Accent — Paper Mist hover fill */
-  --accent:                 #f5f5f5;
-  --accent-foreground:      #171717;
+  /* Accent */
+  --accent:                 #162d4e;
+  --accent-foreground:      #ecf5ff;
 
   /* Destructive */
   --destructive:            #dc2626;
   --destructive-foreground: #ffffff;
 
-  /* Borders — Ash (the structural 1px line that holds everything together) */
-  --border:                 #e5e5e5;
-  --input:                  #e5e5e5;   /* inputs use ash border (note: Dub signature uses near-black for inputs) */
+  /* Borders — subtle navy */
+  --border:                 #1e3a58;
+  --input:                  #264562;
 
-  /* Focus ring — Electric Blue */
-  --ring:                   #2563eb;
+  /* Focus ring — securities blue */
+  --ring:                   #1d6ef8;
 
-  /* Base radius = button radius */
-  --radius:                 8px;
+  /* Base radius — slightly tighter for securities look */
+  --radius:                 6px;
 
   /* Sidebar */
-  --sidebar:                #ffffff;
-  --sidebar-foreground:     #171717;
-  --sidebar-border:         #e5e5e5;
-
-  /* ── Slate color scale inversion (backward compat for dark-first components) ──
-     KisVerificationPanel 등 기존 dark-first 컴포넌트의 slate-* 클래스를
-     Dub 라이트 팔레트 값으로 매핑합니다.                                      */
-  --color-slate-950: #f5f5f5;   /* Paper Mist — bg-slate-950 → 연한 배경 */
-  --color-slate-900: #f5f5f5;   /* Paper Mist — bg-slate-900 → 연한 배경 */
-  --color-slate-800: #e5e5e5;   /* Ash — border */
-  --color-slate-700: #d4d4d4;   /* Smoke */
-  --color-slate-600: #a3a3a3;   /* Silver */
-  /* slate-500: 중간값 유지 */
-  --color-slate-400: #525252;   /* Steel */
-  --color-slate-300: #404040;   /* Slate (Dub) */
-  --color-slate-200: #262626;   /* Graphite */
-  --color-slate-100: #171717;   /* Charcoal — text-slate-100 → 기본 텍스트 */
+  --sidebar:                #11243c;
+  --sidebar-foreground:     #ecf5ff;
+  --sidebar-border:         #1e3a58;
 }
 
 /* ── Global base styles ──────────────────────────────────────────────────── */
@@ -174,14 +160,14 @@ code, pre, kbd, samp, .font-mono {
   outline-offset: 2px;
 }
 
-/* ── Scrollbar (webkit) ──────────────────────────────────────────────────── */
-::-webkit-scrollbar          { width: 5px; height: 5px; }
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track    { background: transparent; }
-::-webkit-scrollbar-thumb    { background: #e5e5e5; border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: #d4d4d4; }
+::-webkit-scrollbar-thumb    { background: #264562; border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: #344e72; }
 
-/* ── Dub dotted grid background (decorative, optional) ──────────────────── */
+/* ── Securities grid background ──────────────────────────────────────────── */
 .dub-grid-bg {
-  background-image: radial-gradient(circle, #e5e5e5 1px, transparent 1px);
+  background-image: radial-gradient(circle, #1e3a58 1px, transparent 1px);
   background-size: 24px 24px;
 }

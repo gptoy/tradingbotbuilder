@@ -29,7 +29,7 @@ interface IndexData {
 }
 interface MarketIndices { kospi: IndexData; kosdaq: IndexData; usdkrw: IndexData; ts: number; }
 
-function MarketStatusBar() {
+function MarketStatusBar({ onRefresh }: { onRefresh?: () => void }) {
   const [data, setData] = useState<MarketIndices | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastFetch, setLastFetch] = useState(0);
@@ -39,48 +39,58 @@ function MarketStatusBar() {
     setLoading(true);
     try {
       const r = await fetch('/api/market/indices');
-      if (r.ok) { setData(await r.json()); setLastFetch(Date.now()); }
+      if (r.ok) { setData(await r.json()); setLastFetch(Date.now()); onRefresh?.(); }
     } catch { } finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []); // eslint-disable-line
   useEffect(() => { const iv = setInterval(load, 60_000); return () => clearInterval(iv); }, []); // eslint-disable-line
 
-  const Chip = ({ d, label }: { d?: IndexData; label: string }) => {
+  const IndexBlock = ({ d, label }: { d?: IndexData; label: string }) => {
     const up = d?.direction === '2', dn = d?.direction === '5';
-    const col = up ? 'text-rose-600' : dn ? 'text-blue-600' : 'text-fog';
-    const Icon = up ? TrendingUp : dn ? TrendingDown : Minus;
+    const col = up ? 'text-red-400' : dn ? 'text-blue-400' : 'text-[#80acd0]';
+    const bg  = up ? 'text-red-500/80' : dn ? 'text-blue-500/80' : 'text-[#80acd0]';
+    const arrow = up ? '▲' : dn ? '▼' : '—';
     return (
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-baseline gap-2.5 px-4 border-r border-[#1e3a58] last:border-0">
+        <span className="text-[10px] font-semibold text-[#80acd0] tracking-wide shrink-0">{label}</span>
         {d ? (
           <>
-            <Icon className={cn('h-3 w-3', col)} />
-            <span className="text-[11px] text-fog">{label}</span>
-            <span className={cn('text-[11px] font-bold font-mono', col)}>{d.price.toLocaleString()}</span>
-            <span className={cn('text-[11px] font-mono', col)}>{up ? '+' : ''}{d.changeRate.toFixed(2)}%</span>
+            <span className={cn('text-[15px] font-bold font-mono tabular-nums', col)}>
+              {d.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}
+            </span>
+            <span className={cn('text-[11px] font-mono tabular-nums', bg)}>
+              {arrow} {Math.abs(d.change).toFixed(2)}
+            </span>
+            <span className={cn('text-[11px] font-mono font-semibold tabular-nums', col)}>
+              {up ? '+' : dn ? '-' : ''}{Math.abs(d.changeRate).toFixed(2)}%
+            </span>
           </>
         ) : (
-          <span className="text-[11px] text-fog font-mono">{label} --</span>
+          <span className="text-[15px] font-mono text-[#1e3a58]">—</span>
         )}
       </div>
     );
   };
 
   return (
-    <div className="flex items-center gap-4 flex-wrap">
-      <Chip d={data?.kospi}  label="KOSPI" />
-      <span className="text-ash">|</span>
-      <Chip d={data?.kosdaq} label="KOSDAQ" />
-      <span className="text-ash">|</span>
-      <Chip d={data?.usdkrw} label="USD/KRW" />
-      <Button variant="ghost" size="icon-sm" onClick={load} disabled={loading}>
-        <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
-      </Button>
-      {lastFetch > 0 && (
-        <span className="text-[11px] text-fog font-mono hidden md:block">
-          {new Date(lastFetch).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준
-        </span>
-      )}
+    <div className="flex items-center">
+      <IndexBlock d={data?.kospi}  label="KOSPI" />
+      <IndexBlock d={data?.kosdaq} label="KOSDAQ" />
+      <IndexBlock d={data?.usdkrw} label="USD/KRW" />
+      <div className="pl-3">
+        <button
+          onClick={load} disabled={loading}
+          className="p-1.5 rounded text-[#80acd0] hover:text-[#ecf5ff] hover:bg-[#162d4e] transition cursor-pointer"
+        >
+          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+        </button>
+        {lastFetch > 0 && (
+          <div className="text-[9px] text-[#608ab0] font-mono text-center mt-0.5">
+            {new Date(lastFetch).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -157,13 +167,13 @@ function StrategyConfig({ config, onChange }: { config: BotConfig; onChange: (k:
 }
 
 // ── Tab definitions ───────────────────────────────────────────────────────────
-const TABS: { id: Tab; icon: React.ReactNode; label: string; sub: string }[] = [
-  { id: 'dashboard',  icon: <LayoutDashboard className="h-4 w-4" />, label: '대시보드',    sub: '핵심 현황' },
-  { id: 'broker',     icon: <ShieldCheck className="h-4 w-4" />,     label: '자동매매 연동', sub: 'KIS·Toss·키움' },
-  { id: 'backtest',   icon: <BarChart3 className="h-4 w-4" />,       label: '백테스트',    sub: '과거 검증' },
-  { id: 'elephant',   icon: <Layers className="h-4 w-4" />,          label: '엘리펀트',    sub: '장대캔들 5분봉' },
-  { id: 'simulator',  icon: <Activity className="h-4 w-4" />,        label: '시뮬레이터',  sub: '가상 매매' },
-  { id: 'reference',  icon: <Code2 className="h-4 w-4" />,           label: '코드·가이드', sub: '개발 참고' },
+const TABS: { id: Tab; icon: React.ReactNode; label: string; badge?: string }[] = [
+  { id: 'dashboard',  icon: <LayoutDashboard className="h-3.5 w-3.5" />, label: '대시보드' },
+  { id: 'broker',     icon: <ShieldCheck className="h-3.5 w-3.5" />,     label: '자동매매',  badge: 'KIS·Toss' },
+  { id: 'backtest',   icon: <BarChart3 className="h-3.5 w-3.5" />,       label: '백테스트' },
+  { id: 'elephant',   icon: <Layers className="h-3.5 w-3.5" />,          label: '엘리펀트',  badge: '5분봉' },
+  { id: 'simulator',  icon: <Activity className="h-3.5 w-3.5" />,        label: '시뮬레이터' },
+  { id: 'reference',  icon: <Code2 className="h-3.5 w-3.5" />,           label: '코드·가이드' },
 ];
 
 // ── Reference tab (SetupGuide + Code) ────────────────────────────────────────
@@ -222,62 +232,66 @@ export default function App() {
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
 
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 border-b border-border bg-card/95 backdrop-blur-md">
-        <div className="px-6 py-2.5 flex items-center justify-between gap-6">
-          {/* Brand */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            <div className="h-7 w-7 bg-midnight-ink rounded-[8px] flex items-center justify-center">
+      <header className="sticky top-0 z-40 border-b border-border bg-card backdrop-blur-md">
+        <div className="flex items-stretch h-12">
+
+          {/* Brand — fixed width left block */}
+          <div className="flex items-center gap-2.5 px-4 border-r border-border shrink-0">
+            <div className="h-6 w-6 bg-electric-blue rounded-[5px] flex items-center justify-center">
               <Activity className="h-3.5 w-3.5 text-white" />
             </div>
             <div>
-              <h1 className="text-sm font-bold tracking-tight text-foreground leading-none">
+              <h1 className="text-[12px] font-bold tracking-tight text-foreground leading-none">
                 자산 관리 자동매매
               </h1>
-              <p className="text-[10px] text-fog mt-0.5">MACD + RSI · KIS / Toss / 키움</p>
+              <p className="text-[9px] text-fog mt-0.5 font-mono">KOSPI TOP 20 · MACD+RSI</p>
             </div>
-            <Badge variant="outline" className="text-[9px] font-mono ml-1">v4.0</Badge>
           </div>
 
-          {/* Market indices */}
-          <div className="flex-1 hidden lg:block">
+          {/* Market ticker — fills remaining space */}
+          <div className="flex-1 flex items-center px-2 overflow-x-auto">
             <MarketStatusBar />
           </div>
 
-          {/* KST clock */}
-          <div className="flex items-center gap-1.5 text-[11px] text-fog font-mono shrink-0">
-            <Clock className="h-3 w-3" />
-            {nowKst} KST
+          {/* Clock — right block */}
+          <div className="flex items-center gap-2 px-4 border-l border-border shrink-0">
+            <div className="text-right">
+              <div className="text-[12px] font-mono font-bold text-foreground tabular-nums">{nowKst}</div>
+              <div className="text-[9px] text-fog">KST</div>
+            </div>
           </div>
         </div>
       </header>
 
       {/* ── Navigation ───────────────────────────────────────────────────── */}
-      <nav className="sticky top-[52px] z-30 border-b border-border bg-canvas-white/90 backdrop-blur-sm">
-        <div className="px-4 flex items-end gap-0">
+      <nav className="sticky top-12 z-30 border-b border-border bg-[#11243c]">
+        <div className="flex items-stretch h-9 px-2 gap-0">
           {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                'group flex items-center gap-2 px-4 py-2.5 text-sm font-medium transition-all border-b-2 cursor-pointer whitespace-nowrap',
+                'relative flex items-center gap-1.5 px-3.5 text-[12px] font-medium transition-all cursor-pointer whitespace-nowrap',
                 activeTab === tab.id
-                  ? 'border-electric-blue text-electric-blue'
-                  : 'border-transparent text-fog hover:text-foreground hover:border-ash',
+                  ? 'text-[#1d6ef8] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-[2px] after:bg-[#1d6ef8]'
+                  : 'text-fog hover:text-foreground hover:bg-[#152e48]/60',
               )}
             >
               <span className={cn(
                 'transition-colors',
-                activeTab === tab.id ? 'text-electric-blue' : 'text-fog group-hover:text-foreground',
+                activeTab === tab.id ? 'text-[#1d6ef8]' : 'text-fog',
               )}>
                 {tab.icon}
               </span>
               {tab.label}
-              {tab.id === 'dashboard' && (
+              {tab.badge && (
                 <span className={cn(
-                  'hidden sm:block text-[10px] font-normal',
-                  activeTab === tab.id ? 'text-electric-blue/70' : 'text-fog',
+                  'text-[8px] px-1 py-0.5 rounded font-mono',
+                  activeTab === tab.id
+                    ? 'bg-[#1d6ef8]/20 text-[#1d6ef8]'
+                    : 'bg-[#1e3a58] text-[#80acd0]',
                 )}>
-                  {tab.sub}
+                  {tab.badge}
                 </span>
               )}
             </button>
@@ -286,7 +300,7 @@ export default function App() {
       </nav>
 
       {/* ── Body ─────────────────────────────────────────────────────────── */}
-      <main className="flex-1 p-5">
+      <main className="flex-1 p-4">
 
         {/* KisVerificationPanel: CSS hidden으로 항상 마운트 → auto-trade interval 유지 */}
         <div className={isBroker ? '' : 'hidden'}>
@@ -323,9 +337,9 @@ export default function App() {
       </main>
 
       {/* ── Footer ───────────────────────────────────────────────────────── */}
-      <footer className="border-t border-border py-3 px-6 flex items-center justify-between text-[11px] text-fog font-mono">
-        <span>개인 투자용 · 투자 결과는 본인 책임입니다</span>
-        <span>React · TypeScript · Tailwind CSS v4 · shadcn/ui · KIS OpenAPI</span>
+      <footer className="border-t border-border py-2 px-4 flex items-center justify-between text-[10px] text-[#608ab0] font-mono">
+        <span>⚠ 개인 투자용 · 투자 결과는 본인 책임입니다</span>
+        <span>React 19 · TypeScript · Tailwind v4 · KIS OpenAPI · Toss OpenAPI</span>
       </footer>
     </div>
   );

@@ -1,18 +1,18 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Bot, ZapOff, TrendingUp, TrendingDown, Minus, Calendar, Activity, Wallet } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  RefreshCw, Bot, TrendingUp, TrendingDown, Minus,
+  Activity, Wallet, BarChart2, CircleDot, ChevronUp, ChevronDown,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
+
+// ── Interfaces ────────────────────────────────────────────────────────────────
 
 interface KisBalanceSummary {
   dnca_tot_amt: string;
-  nxdy_excc_amt: string;
-  prvs_rcdl_excc_amt: string;
-  thdt_buy_amt: string;
-  thdt_sll_amt: string;
-  thdt_tlex_amt: string;
   ord_psbl_cash: string;
   scts_evlu_amt: string;
   tot_evlu_amt: string;
-  nass_amt: string;
+  thdt_buy_amt: string;
   evlu_pfls_smtl_amt: string;
 }
 
@@ -22,7 +22,6 @@ interface KisHolding {
   hldg_qty: string;
   pchs_avg_pric: string;
   prpr: string;
-  evlu_amt: string;
   evlu_pfls_amt: string;
   evlu_pfls_rt: string;
 }
@@ -30,10 +29,10 @@ interface KisHolding {
 interface AutoState {
   active: boolean;
   serverType?: 'virtual' | 'real';
-  symbol?: string;
+  symbols?: string[];
   qty?: string;
   interval?: number;
-  position?: { qty: number; avgPrice: number } | null;
+  positions?: Record<string, { qty: number; avgPrice: number } | null>;
 }
 
 interface TradeRecord {
@@ -44,19 +43,41 @@ interface TradeRecord {
   symbol: string;
 }
 
-type PeriodKey = 'today' | '7d' | '30d' | 'all' | 'custom';
-
+type PeriodKey = 'today' | '7d' | '30d' | 'all';
 const PERIOD_LABELS: Record<PeriodKey, string> = {
-  today: '오늘', '7d': '7일', '30d': '30일', all: '전체', custom: '직접',
+  today: '오늘', '7d': '7일', '30d': '30일', all: '전체',
 };
 
+// ── Constants ─────────────────────────────────────────────────────────────────
+
 const STOCK_NAMES: Record<string, string> = {
-  '005930': '삼성전자', '000660': 'SK하이닉스', '035420': 'NAVER',
-  '035720': '카카오',   '207940': '삼성바이오',  '005380': '현대차',
-  '000270': '기아',     '051910': 'LG화학',      '068270': '셀트리온',
+  '005930': '삼성전자',   '000660': 'SK하이닉스', '207940': '삼성바이오',
+  '005380': '현대차',     '035420': 'NAVER',      '000270': '기아',
+  '051910': 'LG화학',     '068270': '셀트리온',   '105560': 'KB금융',
+  '055550': '신한지주',   '035720': '카카오',     '003550': 'LG',
+  '034730': 'SK',         '028260': '삼성물산',   '012330': '현대모비스',
+  '066570': 'LG전자',     '032830': '삼성생명',   '086790': '하나금융',
+  '316140': '우리금융',   '096770': 'SK이노베이션',
 };
 
 const TRADING_START_KEY = 'tbbuilder:trading:start';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR');
+const fmtCompact = (n: number) => {
+  if (Math.abs(n) >= 100_000_000) return `${(n / 100_000_000).toFixed(1)}억`;
+  if (Math.abs(n) >= 10_000) return `${(n / 10_000).toFixed(0)}만`;
+  return fmt(n);
+};
+const fmtTime = (ts: number) =>
+  new Date(ts).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+const fmtDateShort = (ts: number) =>
+  new Date(ts).toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' });
+const elapsed = (from: number) => {
+  const d = Math.ceil((Date.now() - from) / 86_400_000);
+  return d <= 1 ? '오늘' : `D+${d - 1}`;
+};
 
 function readAutoState(key: string): AutoState {
   try { return { active: false, ...JSON.parse(localStorage.getItem(key) ?? '{}') }; }
@@ -64,134 +85,130 @@ function readAutoState(key: string): AutoState {
 }
 
 function readAllTrades(): TradeRecord[] {
-  try {
-    const raw = localStorage.getItem('tbbuilder:trades');
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  try { return JSON.parse(localStorage.getItem('tbbuilder:trades') ?? '[]'); }
+  catch { return []; }
 }
 
-function filterByPeriod(trades: TradeRecord[], period: PeriodKey, customStart: string, customEnd: string): TradeRecord[] {
+function filterByPeriod(trades: TradeRecord[], period: PeriodKey): TradeRecord[] {
   const now = Date.now();
-  let from = 0, to = now;
-  if (period === 'today') { const d = new Date(); d.setHours(0,0,0,0); from = d.getTime(); }
+  let from = 0;
+  if (period === 'today')  { const d = new Date(); d.setHours(0,0,0,0); from = d.getTime(); }
   else if (period === '7d')  { from = now - 7  * 86_400_000; }
   else if (period === '30d') { from = now - 30 * 86_400_000; }
-  else if (period === 'custom') {
-    if (customStart) from = new Date(customStart + 'T00:00:00').getTime();
-    if (customEnd)   to   = new Date(customEnd   + 'T23:59:59').getTime();
-  }
-  return trades.filter(t => t.timestamp >= from && t.timestamp <= to);
+  return trades.filter(t => t.timestamp >= from);
 }
 
 function calcPnL(trades: TradeRecord[]) {
-  const buyQ: { price: number; qty: number }[] = [];
+  const buyQ: Record<string, { price: number; qty: number }[]> = {};
   let profit = 0, loss = 0, invested = 0, tradeCount = 0;
   for (const t of trades) {
-    if (t.type === 'BUY') { buyQ.push({ price: t.price, qty: t.qty }); invested += t.price * t.qty; }
-    else {
+    if (!buyQ[t.symbol]) buyQ[t.symbol] = [];
+    if (t.type === 'BUY') {
+      buyQ[t.symbol].push({ price: t.price, qty: t.qty });
+      invested += t.price * t.qty;
+    } else {
       let rem = t.qty;
-      while (rem > 0 && buyQ.length > 0) {
-        const b = buyQ[0], m = Math.min(rem, b.qty), pnl = (t.price - b.price) * m;
+      while (rem > 0 && buyQ[t.symbol]?.length > 0) {
+        const b = buyQ[t.symbol][0];
+        const m = Math.min(rem, b.qty);
+        const pnl = (t.price - b.price) * m;
         if (pnl >= 0) profit += pnl; else loss += Math.abs(pnl);
-        b.qty -= m; rem -= m; if (b.qty === 0) buyQ.shift(); tradeCount++;
+        b.qty -= m; rem -= m;
+        if (b.qty === 0) buyQ[t.symbol].shift();
+        tradeCount++;
       }
     }
   }
   return { profit, loss, invested, tradeCount };
 }
 
-const fmt = (n: number) => Math.round(n).toLocaleString('ko-KR');
-const fmtDate = (ts: number) =>
-  new Date(ts).toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
-const fmtDateTime = (ts: number) =>
-  new Date(ts).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const elapsed = (from: number) => {
-  const d = Math.ceil((Date.now() - from) / 86_400_000);
-  return d <= 1 ? '오늘' : `${d}일째`;
-};
+function mergePositions(kis: AutoState, toss: AutoState) {
+  const out: { symbol: string; qty: number; avgPrice: number; broker: 'KIS' | 'Toss' }[] = [];
+  const seen = new Set<string>();
+  for (const [sym, pos] of Object.entries(kis.positions ?? {})) {
+    if (pos && pos.qty > 0) { out.push({ symbol: sym, ...pos, broker: 'KIS' }); seen.add(sym); }
+  }
+  for (const [sym, pos] of Object.entries(toss.positions ?? {})) {
+    if (pos && pos.qty > 0 && !seen.has(sym)) out.push({ symbol: sym, ...pos, broker: 'Toss' });
+  }
+  return out;
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function SectionHeader({ icon, title, right }: {
+  icon: React.ReactNode; title: string; right?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2 border-b border-[#1e3a58]">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[#1d6ef8]">{icon}</span>
+        <span className="text-[10px] font-bold tracking-[0.08em] uppercase text-[#9ec4de]">{title}</span>
+      </div>
+      {right && <div className="text-[10px] text-[#80acd0]">{right}</div>}
+    </div>
+  );
+}
+
+function PnLBadge({ value, className }: { value: number; className?: string }) {
+  const up = value > 0, dn = value < 0;
+  return (
+    <span className={cn(
+      'font-mono font-bold tabular-nums',
+      up ? 'text-red-400' : dn ? 'text-blue-400' : 'text-[#80acd0]',
+      className,
+    )}>
+      {up ? '+' : ''}{fmt(value)}
+    </span>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
 
 export default function DashboardPanel() {
   const [kisAuto,    setKisAuto]    = useState<AutoState>({ active: false });
   const [tossAuto,   setTossAuto]   = useState<AutoState>({ active: false });
   const [kiwoomAuto, setKiwoomAuto] = useState<AutoState>({ active: false });
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
-  const [stockName,    setStockName]    = useState('');
-  const [loading,      setLoading]      = useState(false);
-  const [lastUpdate,   setLastUpdate]   = useState<Date | null>(null);
-  const [period,       setPeriod]       = useState<PeriodKey>('all');
-  const [customStart,  setCustomStart]  = useState('');
-  const [customEnd,    setCustomEnd]    = useState(new Date().toISOString().slice(0, 10));
-  const [allTrades,    setAllTrades]    = useState<TradeRecord[]>([]);
-  const [filteredPnL,  setFilteredPnL]  = useState({ profit: 0, loss: 0, invested: 0, tradeCount: 0 });
-  const [tradingStart, setTradingStart] = useState<number | null>(null);
-  const [periodStartPrice, setPeriodStartPrice] = useState<number | null>(null);
-  const [kospi,   setKospi]   = useState<{ price: number; change: number } | null>(null);
-  const [kosdaq,  setKosdaq]  = useState<{ price: number; change: number } | null>(null);
-  const [kisBalance,  setKisBalance]  = useState<KisBalanceSummary | null>(null);
-  const [kisHoldings, setKisHoldings] = useState<KisHolding[]>([]);
+
+  const [allTrades,   setAllTrades]   = useState<TradeRecord[]>([]);
+  const [period,      setPeriod]      = useState<PeriodKey>('all');
+  const [filteredPnL, setFilteredPnL] = useState({ profit: 0, loss: 0, invested: 0, tradeCount: 0 });
+
+  const [kisBalance,        setKisBalance]        = useState<KisBalanceSummary | null>(null);
+  const [kisHoldings,       setKisHoldings]       = useState<KisHolding[]>([]);
   const [kisBalanceLoading, setKisBalanceLoading] = useState(false);
 
-  const anyActive     = kisAuto.active || tossAuto.active || kiwoomAuto.active;
-  const primarySymbol = (kisAuto.active && kisAuto.symbol)       ? kisAuto.symbol
-                      : (tossAuto.active && tossAuto.symbol)     ? tossAuto.symbol
-                      : (kiwoomAuto.active && kiwoomAuto.symbol) ? kiwoomAuto.symbol
-                      : '000660';
-  const displayName   = stockName || STOCK_NAMES[primarySymbol] || primarySymbol;
-  const primaryPosition = kisAuto.active    ? (kisAuto.position    ?? null)
-                        : tossAuto.active   ? (tossAuto.position   ?? null)
-                        : kiwoomAuto.active ? (kiwoomAuto.position ?? null)
-                        : null;
-  const activeMode = kisAuto.active
-    ? `KIS ${kisAuto.serverType === 'real' ? '실전' : '모의'}`
-    : tossAuto.active ? 'Toss' : kiwoomAuto.active ? '키움' : null;
+  const [heldPrices,    setHeldPrices]    = useState<Record<string, number>>({});
+  const [pricesLoading, setPricesLoading] = useState(false);
 
-  const prevActiveRef = useRef(false);
+  const [tradingStart, setTradingStart] = useState<number | null>(null);
+  const [refreshing,   setRefreshing]   = useState(false);
+  const [lastUpdate,   setLastUpdate]   = useState<Date | null>(null);
 
-  useEffect(() => {
-    const s = localStorage.getItem(TRADING_START_KEY);
-    if (s) setTradingStart(parseInt(s));
-  }, []);
+  const anyActive = kisAuto.active || tossAuto.active || kiwoomAuto.active;
 
-  useEffect(() => {
-    if (anyActive && !prevActiveRef.current && !localStorage.getItem(TRADING_START_KEY)) {
-      const now = Date.now();
-      localStorage.setItem(TRADING_START_KEY, String(now));
-      setTradingStart(now);
-    }
-    prevActiveRef.current = anyActive;
-  }, [anyActive]);
+  // ── Data fetchers ─────────────────────────────────────────────────────────
 
   const readLocalState = useCallback(() => {
-    const kis = readAutoState('tbbuilder:auto:kis');
-    const toss = readAutoState('tbbuilder:auto:toss');
-    const kiwoom = readAutoState('tbbuilder:auto:kiwoom');
-    setKisAuto(kis); setTossAuto(toss); setKiwoomAuto(kiwoom);
+    setKisAuto(readAutoState('tbbuilder:auto:kis'));
+    setTossAuto(readAutoState('tbbuilder:auto:toss'));
+    setKiwoomAuto(readAutoState('tbbuilder:auto:kiwoom'));
     setAllTrades(readAllTrades());
   }, []);
 
-  useEffect(() => {
-    const sym = (kisAuto.active && kisAuto.symbol) ? kisAuto.symbol
-              : (tossAuto.active && tossAuto.symbol) ? tossAuto.symbol
-              : (kiwoomAuto.active && kiwoomAuto.symbol) ? kiwoomAuto.symbol : '000660';
-    const symTrades = allTrades.filter(t => t.symbol === sym);
-    const filtered  = filterByPeriod(symTrades, period, customStart, customEnd);
-    setFilteredPnL(calcPnL(filtered));
-    const firstBuy = filtered.find(t => t.type === 'BUY');
-    setPeriodStartPrice(firstBuy?.price ?? null);
-  }, [allTrades, period, customStart, customEnd, kisAuto, tossAuto, kiwoomAuto]);
-
-  const fetchPrice = useCallback(async (symbol: string) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/stock/${symbol}/price`);
-      if (res.ok) {
-        const p = await res.json();
-        setCurrentPrice(parseInt(p.stck_prpr ?? '0'));
-        setStockName(p.hts_kor_isnm ?? STOCK_NAMES[symbol] ?? symbol);
-      }
-      setLastUpdate(new Date());
-    } catch { /* ignore */ }
-    setLoading(false);
+  const fetchHeldPrices = useCallback(async (positions: ReturnType<typeof mergePositions>) => {
+    if (positions.length === 0) return;
+    setPricesLoading(true);
+    const results: Record<string, number> = {};
+    await Promise.allSettled(positions.map(async ({ symbol }) => {
+      try {
+        const r = await fetch(`/api/stock/${symbol}/price`);
+        if (r.ok) { const d = await r.json(); const p = parseInt(d.stck_prpr ?? '0'); if (p > 0) results[symbol] = p; }
+      } catch { /* ignore */ }
+    }));
+    setHeldPrices(prev => ({ ...prev, ...results }));
+    setPricesLoading(false);
+    setLastUpdate(new Date());
   }, []);
 
   const fetchKisBalance = useCallback(async () => {
@@ -199,467 +216,470 @@ export default function DashboardPanel() {
       const session = JSON.parse(localStorage.getItem('tbbuilder:kis:live-session') ?? '{}');
       const creds   = JSON.parse(localStorage.getItem('tbbuilder:kis:virtual') ?? '{}');
       const auto    = JSON.parse(localStorage.getItem('tbbuilder:auto:kis') ?? '{}');
-      const token   = session.token;
-      const accountNo = creds.accountNo;
-      const appKey    = creds.appKey;
-      const appSecret = creds.appSecret;
+      const { token } = session;
+      const { accountNo, appKey, appSecret } = creds;
       if (!token || !accountNo || !appKey) return;
-      const cano       = accountNo.slice(0, 8);
-      const acntPrdtCd = accountNo.length > 8 ? accountNo.slice(8) : '01';
-      const serverType = auto.serverType ?? 'virtual';
+      const cano = accountNo.slice(0, 8), acntPrdtCd = accountNo.length > 8 ? accountNo.slice(8) : '01';
       setKisBalanceLoading(true);
       const res = await fetch(
         `/api/kis/balance?cano=${encodeURIComponent(cano)}&acntPrdtCd=${encodeURIComponent(acntPrdtCd)}`,
-        { headers: { 'x-kis-token': token, 'x-kis-appkey': appKey, 'x-kis-appsecret': appSecret, 'x-kis-server': serverType } },
+        { headers: { 'x-kis-token': token, 'x-kis-appkey': appKey, 'x-kis-appsecret': appSecret, 'x-kis-server': auto.serverType ?? 'virtual' } },
       );
       const data = await res.json();
-      if (data.output2) {
-        setKisBalance((data.output2?.[0] ?? data.output2) as KisBalanceSummary);
-        setKisHoldings((data.output1 ?? []) as KisHolding[]);
-      }
+      if (data.output2) { setKisBalance((data.output2?.[0] ?? data.output2) as KisBalanceSummary); setKisHoldings((data.output1 ?? []) as KisHolding[]); }
     } catch { /* ignore */ }
     setKisBalanceLoading(false);
   }, []);
 
-  const fetchIndices = useCallback(async () => {
-    try {
-      const [r1, r2] = await Promise.allSettled([
-        fetch('/api/stock/0001/price'),
-        fetch('/api/stock/1001/price'),
-      ]);
-      const parse = async (r: PromiseSettledResult<Response>) => {
-        if (r.status !== 'fulfilled' || !r.value.ok) return null;
-        const d = await r.value.json();
-        const price  = parseFloat(d.bstp_nmix_prpr ?? d.stck_prpr ?? '0');
-        const change = parseFloat(d.bstp_nmix_prdy_vrss ?? d.prdy_vrss ?? '0');
-        return price > 0 ? { price, change } : null;
-      };
-      const [k1, k2] = await Promise.all([parse(r1), parse(r2)]);
-      if (k1) setKospi(k1);
-      if (k2) setKosdaq(k2);
-    } catch { /* ignore */ }
+  // ── Effects ───────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const s = localStorage.getItem(TRADING_START_KEY);
+    if (s) setTradingStart(parseInt(s));
   }, []);
 
-  useEffect(() => { readLocalState(); }, [readLocalState]);
   useEffect(() => {
-    fetchPrice(primarySymbol); fetchIndices(); fetchKisBalance();
-    const iv1 = setInterval(() => fetchPrice(primarySymbol), 30_000);
-    const iv2 = setInterval(fetchIndices, 60_000);
-    const iv3 = setInterval(fetchKisBalance, 60_000);
-    return () => { clearInterval(iv1); clearInterval(iv2); clearInterval(iv3); };
-  }, [primarySymbol, fetchPrice, fetchIndices, fetchKisBalance]);
+    if (anyActive && !localStorage.getItem(TRADING_START_KEY)) {
+      const now = Date.now();
+      localStorage.setItem(TRADING_START_KEY, String(now));
+      setTradingStart(now);
+    }
+  }, [anyActive]);
+
+  useEffect(() => { readLocalState(); }, [readLocalState]);
   useEffect(() => {
     const fn = (e: StorageEvent) => { if (e.key?.startsWith('tbbuilder:')) readLocalState(); };
     window.addEventListener('storage', fn);
     return () => window.removeEventListener('storage', fn);
   }, [readLocalState]);
+  useEffect(() => { const iv = setInterval(readLocalState, 5_000); return () => clearInterval(iv); }, [readLocalState]);
+
   useEffect(() => {
-    const iv = setInterval(readLocalState, 5_000);
+    const filtered = filterByPeriod(allTrades, period);
+    setFilteredPnL(calcPnL(filtered));
+  }, [allTrades, period]);
+
+  useEffect(() => {
+    const positions = mergePositions(kisAuto, tossAuto);
+    fetchHeldPrices(positions);
+    const iv = setInterval(() => fetchHeldPrices(positions), 30_000);
     return () => clearInterval(iv);
-  }, [readLocalState]);
+  }, [kisAuto, tossAuto, fetchHeldPrices]);
 
-  const handleRefresh = () => { readLocalState(); fetchPrice(primarySymbol); fetchIndices(); fetchKisBalance(); };
+  useEffect(() => {
+    fetchKisBalance();
+    const iv = setInterval(fetchKisBalance, 60_000);
+    return () => clearInterval(iv);
+  }, [fetchKisBalance]);
 
-  // ── 손익 계산
-  const investedAmt   = primaryPosition ? Math.round(primaryPosition.avgPrice * primaryPosition.qty) : 0;
-  const unrealizedAmt = primaryPosition && currentPrice
-    ? Math.round((currentPrice - primaryPosition.avgPrice) * primaryPosition.qty) : 0;
-  const unrealizedPct = primaryPosition && currentPrice
-    ? (currentPrice - primaryPosition.avgPrice) / primaryPosition.avgPrice * 100 : 0;
-  const netPnL        = filteredPnL.profit - filteredPnL.loss + unrealizedAmt;
-  const periodRoiPct  = filteredPnL.invested > 0
-    ? (filteredPnL.profit - filteredPnL.loss) / filteredPnL.invested * 100 : 0;
+  // ── Derived ───────────────────────────────────────────────────────────────
 
-  const upText   = 'text-red-600';
-  const downText = 'text-blue-600';
-  const pnlText  = unrealizedAmt > 0 ? upText : unrealizedAmt < 0 ? downText : 'text-[#737373]';
-  const pctText  = unrealizedPct > 0 ? upText : unrealizedPct < 0 ? downText : 'text-[#737373]';
-  const netText  = netPnL > 0 ? upText : netPnL < 0 ? downText : 'text-[#171717]';
-  const netIcon  = netPnL > 0 ? <TrendingUp className="h-5 w-5 text-red-600" />
-                 : netPnL < 0 ? <TrendingDown className="h-5 w-5 text-blue-600" />
-                 : <Minus className="h-5 w-5 text-[#737373]" />;
-  const netIconBg = netPnL > 0 ? 'bg-red-50' : netPnL < 0 ? 'bg-blue-50' : 'bg-[#f5f5f5]';
+  const positions     = mergePositions(kisAuto, tossAuto);
+  const filteredTrades = filterByPeriod(allTrades, period).slice().reverse();
 
-  // 기간 내 필터된 거래 목록
-  const sym = (kisAuto.active && kisAuto.symbol) ? kisAuto.symbol
-            : (tossAuto.active && tossAuto.symbol) ? tossAuto.symbol
-            : (kiwoomAuto.active && kiwoomAuto.symbol) ? kiwoomAuto.symbol : '000660';
-  const filteredTrades = filterByPeriod(allTrades.filter(t => t.symbol === sym), period, customStart, customEnd);
+  const unrealizedAmt = positions.reduce((acc, p) => {
+    const cur = heldPrices[p.symbol]; return cur ? acc + (cur - p.avgPrice) * p.qty : acc;
+  }, 0);
+  const totalInvested = positions.reduce((acc, p) => acc + p.avgPrice * p.qty, 0);
+  const realizedNet   = filteredPnL.profit - filteredPnL.loss;
+  const netPnL        = realizedNet + unrealizedAmt;
+  const periodRoiPct  = filteredPnL.invested > 0 ? realizedNet / filteredPnL.invested * 100 : 0;
+
+  const kisHeldCount  = Object.values(kisAuto.positions  ?? {}).filter(Boolean).length;
+  const tossHeldCount = Object.values(tossAuto.positions ?? {}).filter(Boolean).length;
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    readLocalState();
+    await Promise.allSettled([fetchKisBalance(), fetchHeldPrices(positions)]);
+    setLastUpdate(new Date());
+    setRefreshing(false);
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-3 p-3">
+    <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
 
-      {/* ── 헤더 ──────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {anyActive ? (
-            <>
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#2563eb] opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-[#2563eb]" />
-              </span>
-              <span className="text-xs font-semibold text-[#171717]">{activeMode}</span>
-              <span className="text-[#d4d4d4]">·</span>
-              <span className="text-xs font-mono text-[#737373]">{primarySymbol}</span>
-              <span className="text-xs text-[#737373]">{displayName}</span>
-            </>
-          ) : (
-            <span className="flex items-center gap-1.5 text-xs text-[#737373]">
-              <ZapOff className="h-3.5 w-3.5" />
-              자동매매 비활성
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {lastUpdate && (
-            <span className="text-[10px] font-mono text-[#a3a3a3]">
-              {lastUpdate.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-          )}
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="p-1.5 rounded-lg text-[#a3a3a3] hover:text-[#171717] hover:bg-[#f5f5f5] transition cursor-pointer"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-          </button>
-        </div>
-      </div>
+      {/* ════════════════════ LEFT SIDEBAR ════════════════════════════════ */}
+      <div className="xl:col-span-4 space-y-3">
 
-      {/* ── 거래 시작일 태그 ───────────────────────────────────────────────── */}
-      {tradingStart && (
-        <div className="flex items-center justify-between px-3 py-2 bg-[#f5f5f5] rounded-lg">
-          <span className="flex items-center gap-1.5 text-[11px] text-[#737373]">
-            <Calendar className="h-3 w-3 text-[#2563eb]" />
-            <span className="font-mono">{fmtDate(tradingStart)}</span>
-            <span>시작 ·</span>
-            <span className="font-semibold text-[#171717]">{elapsed(tradingStart)}</span>
-          </span>
-          <button
-            onClick={() => {
-              const now = Date.now();
-              localStorage.setItem(TRADING_START_KEY, String(now));
-              setTradingStart(now);
-            }}
-            className="text-[10px] text-[#a3a3a3] hover:text-[#525252] transition cursor-pointer"
-          >
-            초기화
-          </button>
-        </div>
-      )}
-
-      {/* ── 히어로: 순손익 + 기간 필터 ────────────────────────────────────── */}
-      <div className="bg-white border border-[#e5e5e5] rounded-2xl p-5">
-        {/* 메인 수치 */}
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <p className="text-[10px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3] mb-2">
-              순손익 합계
-            </p>
-            <p className={cn('text-[2.6rem] leading-none font-black font-mono tracking-tight', netText)}>
-              {netPnL >= 0 ? '+' : ''}{fmt(netPnL)}
-              <span className="text-lg font-normal text-[#a3a3a3] ml-2">원</span>
-            </p>
-            {filteredPnL.invested > 0 && (
-              <p className={cn('text-lg font-bold font-mono mt-2', periodRoiPct > 0 ? upText : periodRoiPct < 0 ? downText : 'text-[#737373]')}>
-                {periodRoiPct >= 0 ? '+' : ''}{periodRoiPct.toFixed(2)}%
-                <span className="text-xs font-normal text-[#a3a3a3] ml-2">수익률</span>
-              </p>
-            )}
-          </div>
-          <div className={cn('h-10 w-10 rounded-xl flex items-center justify-center shrink-0', netIconBg)}>
-            {netIcon}
-          </div>
-        </div>
-
-        {/* 기간 필터 탭 */}
-        <div className="flex gap-1.5">
-          {(Object.keys(PERIOD_LABELS) as PeriodKey[]).map(k => (
-            <button
-              key={k}
-              onClick={() => setPeriod(k)}
-              className={cn(
-                'flex-1 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer border',
-                period === k
-                  ? 'bg-[#0a0a0a] text-white border-[#0a0a0a]'
-                  : 'text-[#737373] border-[#e5e5e5] hover:border-[#d4d4d4] hover:text-[#171717]'
-              )}
-            >
-              {PERIOD_LABELS[k]}
-            </button>
-          ))}
-        </div>
-
-        {/* 직접 입력 날짜 */}
-        {period === 'custom' && (
-          <div className="flex items-center gap-2 mt-2.5">
-            <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
-              className="flex-1 text-[11px] font-mono bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
-            <span className="text-[11px] text-[#a3a3a3]">–</span>
-            <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
-              className="flex-1 text-[11px] font-mono bg-white border border-[#171717] rounded-[6px] px-2 py-1.5 text-[#171717] focus:outline-none focus:ring-1 focus:ring-[#2563eb]" />
-          </div>
-        )}
-      </div>
-
-      {/* ── 4 KPI 그리드 ──────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-2.5">
-
-        {/* 투자금액 */}
-        <div className="bg-white border border-[#e5e5e5] rounded-xl p-4">
-          <p className="text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3] mb-2">투자금액</p>
-          <p className="text-xl font-black font-mono text-[#171717] tracking-tight leading-none">
-            {primaryPosition ? fmt(investedAmt) : <span className="text-[#d4d4d4]">—</span>}
-          </p>
-          {primaryPosition && (
-            <>
-              <p className="text-[9px] font-normal text-[#a3a3a3] mt-0.5">원</p>
-              <p className="text-[10px] text-[#737373] mt-2 font-mono leading-relaxed">
-                {primaryPosition.qty}주<br />
-                <span className="text-[#a3a3a3]">평단</span> {fmt(primaryPosition.avgPrice)}
-              </p>
-            </>
-          )}
-        </div>
-
-        {/* 평가손익 */}
-        <div className={cn(
-          'rounded-xl p-4 border',
-          unrealizedAmt > 0 ? 'bg-red-50 border-red-100' :
-          unrealizedAmt < 0 ? 'bg-blue-50 border-blue-100' :
-          'bg-white border-[#e5e5e5]'
-        )}>
-          <p className="text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3] mb-2">평가손익</p>
-          {primaryPosition && currentPrice ? (
-            <>
-              <p className={cn('text-xl font-black font-mono tracking-tight leading-none', pnlText)}>
-                {unrealizedAmt >= 0 ? '+' : ''}{fmt(unrealizedAmt)}
-              </p>
-              <p className={cn('text-[9px] mt-0.5', unrealizedAmt > 0 ? 'text-red-400' : unrealizedAmt < 0 ? 'text-blue-400' : 'text-[#a3a3a3]')}>원</p>
-              <p className={cn('text-[10px] font-mono font-bold mt-2', pctText)}>
-                {unrealizedPct >= 0 ? '+' : ''}{unrealizedPct.toFixed(2)}%
-              </p>
-              <p className="text-[10px] text-[#a3a3a3] font-mono">{fmt(currentPrice)}원</p>
-            </>
-          ) : (
-            <p className="text-xl font-black font-mono text-[#d4d4d4] leading-none">—</p>
-          )}
-        </div>
-
-        {/* 실현 수익 */}
-        <div className="bg-red-50 border border-red-100 rounded-xl p-4">
-          <div className="flex items-center gap-1 mb-2">
-            <TrendingUp className="h-3 w-3 text-red-400" />
-            <p className="text-[9px] font-semibold tracking-[0.12em] uppercase text-red-400">실현 수익</p>
-          </div>
-          <p className="text-xl font-black font-mono text-red-600 tracking-tight leading-none">
-            +{fmt(filteredPnL.profit)}
-          </p>
-          <p className="text-[9px] text-red-300 mt-0.5">원</p>
-          <p className="text-[10px] text-red-400 mt-2">
-            {filteredPnL.tradeCount > 0 ? `${filteredPnL.tradeCount}건 완결` : '거래 없음'}
-          </p>
-        </div>
-
-        {/* 실현 손실 */}
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-          <div className="flex items-center gap-1 mb-2">
-            <TrendingDown className="h-3 w-3 text-blue-400" />
-            <p className="text-[9px] font-semibold tracking-[0.12em] uppercase text-blue-400">실현 손실</p>
-          </div>
-          <p className="text-xl font-black font-mono text-blue-600 tracking-tight leading-none">
-            -{fmt(filteredPnL.loss)}
-          </p>
-          <p className="text-[9px] text-blue-300 mt-0.5">원</p>
-          <p className="text-[10px] text-blue-400 mt-2">기간 누적</p>
-        </div>
-      </div>
-
-      {/* ── 시황 스트립: 종목 + KOSPI + KOSDAQ ──────────────────────────── */}
-      <div className="bg-white border border-[#e5e5e5] rounded-xl px-4 py-3">
-        <div className="flex items-center gap-1.5 mb-3">
-          <Activity className="h-3 w-3 text-[#a3a3a3]" />
-          <span className="text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3]">시황</span>
-          <span className="text-[9px] text-[#d4d4d4]">· 실시간</span>
-        </div>
-        <div className="flex items-center gap-4">
-
-          {/* 종목 */}
-          <div className="flex-1">
-            <p className="text-[9px] text-[#a3a3a3] mb-0.5">{displayName}</p>
-            <p className="text-sm font-black font-mono text-[#171717]">
-              {currentPrice ? fmt(currentPrice) : '—'}
-            </p>
-            {periodStartPrice && periodStartPrice !== currentPrice && (
-              <p className="text-[9px] text-[#a3a3a3] font-mono">첫체결 {fmt(periodStartPrice)}</p>
-            )}
-          </div>
-
-          <div className="w-px h-8 bg-[#f0f0f0]" />
-
-          {/* KOSPI */}
-          <div className="flex-1">
-            <p className="text-[9px] text-[#a3a3a3] mb-0.5">KOSPI</p>
-            {kospi ? (
-              <>
-                <p className="text-sm font-black font-mono text-[#171717]">
-                  {kospi.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}
-                </p>
-                <p className={cn('text-[9px] font-mono', kospi.change >= 0 ? 'text-red-500' : 'text-blue-500')}>
-                  {kospi.change >= 0 ? '+' : ''}{kospi.change.toFixed(2)}
-                </p>
-              </>
-            ) : (
-              <p className="text-sm font-mono text-[#d4d4d4]">—</p>
-            )}
-          </div>
-
-          <div className="w-px h-8 bg-[#f0f0f0]" />
-
-          {/* KOSDAQ */}
-          <div className="flex-1">
-            <p className="text-[9px] text-[#a3a3a3] mb-0.5">KOSDAQ</p>
-            {kosdaq ? (
-              <>
-                <p className="text-sm font-black font-mono text-[#171717]">
-                  {kosdaq.price.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}
-                </p>
-                <p className={cn('text-[9px] font-mono', kosdaq.change >= 0 ? 'text-red-500' : 'text-blue-500')}>
-                  {kosdaq.change >= 0 ? '+' : ''}{kosdaq.change.toFixed(2)}
-                </p>
-              </>
-            ) : (
-              <p className="text-sm font-mono text-[#d4d4d4]">—</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ── KIS 모의투자 계좌 ─────────────────────────────────────────────── */}
-      {kisBalance && (
-        <div className="bg-white border border-[#e5e5e5] rounded-xl overflow-hidden">
-          {/* 헤더 */}
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#f5f5f5]">
-            <div className="flex items-center gap-1.5">
-              <Wallet className="h-3 w-3 text-[#2563eb]" />
-              <span className="text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3]">KIS 모의투자 계좌</span>
-            </div>
-            <button onClick={() => fetchKisBalance()} disabled={kisBalanceLoading}
-              className="p-1 rounded text-[#a3a3a3] hover:text-[#171717] transition cursor-pointer">
-              <RefreshCw className={cn('h-3 w-3', kisBalanceLoading && 'animate-spin')} />
-            </button>
-          </div>
-
-          {/* 잔고 3×2 그리드 */}
-          <div className="grid grid-cols-3 divide-x divide-[#f5f5f5] border-b border-[#f5f5f5]">
+        {/* ── 자동매매 상태 ──────────────────────────────────────────────── */}
+        <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg overflow-hidden">
+          <SectionHeader
+            icon={<CircleDot className="h-3.5 w-3.5" />}
+            title="자동매매 현황"
+            right={lastUpdate ? lastUpdate.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : undefined}
+          />
+          <div className="divide-y divide-[#162e46]">
             {([
-              ['예수금', parseInt(kisBalance.dnca_tot_amt ?? '0')],
-              ['주문가능', parseInt(kisBalance.ord_psbl_cash ?? '0')],
-              ['총평가금액', parseInt(kisBalance.tot_evlu_amt ?? '0')],
-            ] as [string, number][]).map(([label, val]) => (
-              <div key={label} className="px-3 py-2.5">
-                <p className="text-[9px] text-[#a3a3a3] mb-0.5">{label}</p>
-                <p className="text-xs font-bold font-mono text-[#171717]">{val.toLocaleString()}</p>
+              { label: 'KIS', state: kisAuto,  serverLabel: kisAuto.serverType === 'real' ? '실전' : '모의', held: kisHeldCount },
+              { label: 'Toss', state: tossAuto, serverLabel: '실전', held: tossHeldCount },
+              { label: '키움', state: kiwoomAuto, serverLabel: '실전', held: 0 },
+            ] as const).map(({ label, state, serverLabel, held }) => (
+              <div key={label} className="flex items-center justify-between px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  {state.active ? (
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400" />
+                    </span>
+                  ) : (
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#264562]" />
+                  )}
+                  <span className={cn('text-[12px] font-semibold', state.active ? 'text-[#ecf5ff]' : 'text-[#608ab0]')}>
+                    {label}
+                  </span>
+                  {state.active && (
+                    <span className="text-[9px] px-1 py-0.5 rounded bg-[#1d6ef8]/15 text-[#1d6ef8] font-medium">
+                      {serverLabel}
+                    </span>
+                  )}
+                </div>
+                {state.active ? (
+                  <div className="text-right">
+                    <div className="text-[11px] text-[#ecf5ff] font-mono">{held > 0 ? `${held}종목 보유` : '포지션 없음'}</div>
+                    <div className="text-[9px] text-[#80acd0]">TOP20 감시 · {state.interval ?? 30}s</div>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-[#608ab0]">비활성</span>
+                )}
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-3 divide-x divide-[#f5f5f5]">
-            {(() => {
-              const pnl = parseInt(kisBalance.evlu_pfls_smtl_amt ?? '0');
-              const pnlCls = pnl > 0 ? 'text-red-600' : pnl < 0 ? 'text-blue-600' : 'text-[#171717]';
-              return ([
-                ['유가평가액', parseInt(kisBalance.scts_evlu_amt ?? '0'), 'text-[#171717]'],
-                ['금일매수액', parseInt(kisBalance.thdt_buy_amt ?? '0'), 'text-red-600'],
-                ['평가손익', pnl, pnlCls],
-              ] as [string, number, string][]).map(([label, val, cls]) => (
-                <div key={label} className="px-3 py-2.5">
-                  <p className="text-[9px] text-[#a3a3a3] mb-0.5">{label}</p>
-                  <p className={cn('text-xs font-bold font-mono', cls)}>
-                    {label === '평가손익' && val > 0 ? '+' : ''}{val.toLocaleString()}
-                  </p>
-                </div>
-              ));
-            })()}
+          <div className="px-3 pb-2.5 pt-1 flex items-center justify-between border-t border-[#162e46]">
+            {tradingStart && (
+              <span className="text-[9px] text-[#80acd0]">
+                시작: {fmtDateShort(tradingStart)} <span className="text-[#1d6ef8] font-semibold">{elapsed(tradingStart)}</span>
+              </span>
+            )}
+            <button onClick={handleRefresh} disabled={refreshing}
+              className="ml-auto text-[#80acd0] hover:text-[#ecf5ff] transition cursor-pointer">
+              <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+            </button>
           </div>
+        </div>
 
-          {/* 보유종목 */}
-          {kisHoldings.filter(h => parseInt(h.hldg_qty) > 0).length > 0 && (
-            <div className="border-t border-[#f5f5f5]">
-              <p className="px-4 pt-2.5 pb-1 text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3]">보유종목</p>
-              <div className="divide-y divide-[#f7f7f7]">
-                {kisHoldings.filter(h => parseInt(h.hldg_qty) > 0).map((h, i) => {
-                  const pnl  = parseInt(h.evlu_pfls_amt ?? '0');
-                  const pnlRt = parseFloat(h.evlu_pfls_rt ?? '0');
-                  const isGain = pnl >= 0;
-                  return (
-                    <div key={i} className="px-4 py-2.5 flex items-center justify-between hover:bg-[#fafafa] transition">
-                      <div>
-                        <p className="text-xs font-bold text-[#171717]">{h.prdt_name}</p>
-                        <p className="text-[9px] text-[#a3a3a3] font-mono mt-0.5">
-                          {parseInt(h.hldg_qty).toLocaleString()}주 · 평단 {parseFloat(h.pchs_avg_pric).toLocaleString()}
-                        </p>
+        {/* ── KIS 계좌 잔고 ──────────────────────────────────────────────── */}
+        <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg overflow-hidden">
+          <SectionHeader
+            icon={<Wallet className="h-3.5 w-3.5" />}
+            title={`KIS ${kisAuto.serverType === 'real' ? '실전' : '모의'} 계좌`}
+            right={
+              <button onClick={fetchKisBalance} disabled={kisBalanceLoading}
+                className="text-[#80acd0] hover:text-[#ecf5ff] transition cursor-pointer">
+                <RefreshCw className={cn('h-2.5 w-2.5', kisBalanceLoading && 'animate-spin')} />
+              </button>
+            }
+          />
+          {kisBalance ? (
+            <>
+              {/* 총평가금액 히어로 */}
+              <div className="px-3 py-3 border-b border-[#162e46]">
+                <div className="text-[9px] text-[#80acd0] mb-0.5">총평가금액</div>
+                <div className="text-[20px] font-black font-mono tabular-nums text-[#ecf5ff] leading-none">
+                  {fmtCompact(parseInt(kisBalance.tot_evlu_amt ?? '0'))}
+                  <span className="text-[11px] font-normal text-[#80acd0] ml-1">원</span>
+                </div>
+                {(() => {
+                  const pnl = parseInt(kisBalance.evlu_pfls_smtl_amt ?? '0');
+                  return pnl !== 0 ? (
+                    <div className={cn('text-[11px] font-mono mt-1', pnl > 0 ? 'text-red-400' : 'text-blue-400')}>
+                      {pnl > 0 ? '+' : ''}{fmt(pnl)}원 평가손익
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+              {/* 세부 수치 그리드 */}
+              <div className="grid grid-cols-2 divide-x divide-[#162e46] divide-y-0 border-b border-[#162e46]">
+                {([
+                  ['예수금',   parseInt(kisBalance.dnca_tot_amt  ?? '0')],
+                  ['주문가능', parseInt(kisBalance.ord_psbl_cash ?? '0')],
+                  ['유가평가', parseInt(kisBalance.scts_evlu_amt ?? '0')],
+                  ['금일매수', parseInt(kisBalance.thdt_buy_amt  ?? '0')],
+                ] as [string, number][]).map(([label, val]) => (
+                  <div key={label} className="px-3 py-2">
+                    <div className="text-[9px] text-[#80acd0]">{label}</div>
+                    <div className="text-[11px] font-bold font-mono tabular-nums text-[#ecf5ff]">{fmt(val)}</div>
+                  </div>
+                ))}
+              </div>
+              {/* KIS 보유종목 */}
+              {kisHoldings.filter(h => parseInt(h.hldg_qty) > 0).length > 0 && (
+                <div>
+                  <div className="px-3 py-1.5 text-[9px] font-semibold text-[#80acd0] uppercase tracking-wide border-b border-[#162e46]">
+                    보유종목
+                  </div>
+                  <div className="divide-y divide-[#162e46]">
+                    {kisHoldings.filter(h => parseInt(h.hldg_qty) > 0).map((h, i) => {
+                      const pnl = parseInt(h.evlu_pfls_amt ?? '0');
+                      const rt  = parseFloat(h.evlu_pfls_rt ?? '0');
+                      return (
+                        <div key={i} className="flex items-center justify-between px-3 py-2 hover:bg-[#11243c] transition">
+                          <div>
+                            <div className="text-[11px] font-semibold text-[#ecf5ff]">{h.prdt_name}</div>
+                            <div className="text-[9px] text-[#80acd0] font-mono">
+                              {parseInt(h.hldg_qty)}주 · {fmt(parseFloat(h.pchs_avg_pric))}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[11px] font-mono font-bold text-[#ecf5ff]">{fmt(parseInt(h.prpr))}</div>
+                            <div className={cn('text-[9px] font-mono', pnl >= 0 ? 'text-red-400' : 'text-blue-400')}>
+                              {pnl >= 0 ? '+' : ''}{pnl.toLocaleString()} ({rt >= 0 ? '+' : ''}{rt.toFixed(2)}%)
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex items-center justify-center py-8 text-[11px] text-[#608ab0]">
+              계좌 연결 필요
+            </div>
+          )}
+        </div>
+
+        {/* ── 보유 포지션 (자동매매 기준) ────────────────────────────────── */}
+        {positions.length > 0 && (
+          <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg overflow-hidden">
+            <SectionHeader
+              icon={<BarChart2 className="h-3.5 w-3.5" />}
+              title="자동매매 포지션"
+              right={`${positions.length}종목`}
+            />
+            <div className="divide-y divide-[#162e46]">
+              {positions.map(p => {
+                const cur    = heldPrices[p.symbol];
+                const pnl    = cur ? (cur - p.avgPrice) * p.qty : null;
+                const pnlPct = cur ? (cur - p.avgPrice) / p.avgPrice * 100 : null;
+                const isGain = pnl !== null && pnl >= 0;
+                return (
+                  <div key={`${p.broker}-${p.symbol}`}
+                    className="flex items-center justify-between px-3 py-2 hover:bg-[#11243c] transition">
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-semibold text-[#ecf5ff]">
+                          {STOCK_NAMES[p.symbol] ?? p.symbol}
+                        </span>
+                        <span className="text-[8px] px-1 rounded bg-[#1e3a58] text-[#80acd0]">{p.broker}</span>
                       </div>
-                      <div className="text-right">
-                        <p className="text-xs font-bold font-mono text-[#171717]">
-                          {parseInt(h.prpr).toLocaleString()}원
-                        </p>
-                        <p className={cn('text-[9px] font-mono font-bold', isGain ? 'text-red-600' : 'text-blue-600')}>
-                          {isGain ? '+' : ''}{pnl.toLocaleString()}원 ({pnlRt >= 0 ? '+' : ''}{pnlRt.toFixed(2)}%)
-                        </p>
+                      <div className="text-[9px] text-[#80acd0] font-mono">
+                        {p.qty}주 · 평단 {fmt(p.avgPrice)}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      {cur ? (
+                        <>
+                          <div className="text-[11px] font-mono font-bold text-[#ecf5ff]">{fmt(cur)}</div>
+                          <div className={cn('text-[9px] font-mono', isGain ? 'text-red-400' : 'text-blue-400')}>
+                            {pnl! >= 0 ? '+' : ''}{fmt(pnl!)} ({pnlPct! >= 0 ? '+' : ''}{pnlPct!.toFixed(2)}%)
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-[9px] text-[#608ab0]">{pricesLoading ? '조회중' : '—'}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── 비활성 안내 ────────────────────────────────────────────────── */}
+        {!anyActive && (
+          <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg flex flex-col items-center gap-3 py-10">
+            <div className="h-12 w-12 rounded-xl bg-[#11243c] border border-[#1e3a58] flex items-center justify-center">
+              <Bot className="h-5 w-5 text-[#608ab0]" />
+            </div>
+            <div className="text-center">
+              <p className="text-[12px] font-semibold text-[#80acd0]">자동매매 미연결</p>
+              <p className="text-[10px] text-[#608ab0] mt-1">자동매매 탭에서 KIS 또는 Toss를 연결하세요</p>
+            </div>
+          </div>
+        )}
+
+      </div>{/* end LEFT SIDEBAR */}
+
+      {/* ════════════════════ RIGHT MAIN ══════════════════════════════════ */}
+      <div className="xl:col-span-8 space-y-3">
+
+        {/* ── 손익 히어로 카드 ────────────────────────────────────────────── */}
+        <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg overflow-hidden">
+          <div className="flex items-stretch divide-x divide-[#1e3a58]">
+
+            {/* 순손익 메인 */}
+            <div className="flex-1 p-4">
+              <div className="text-[9px] font-semibold tracking-[0.1em] uppercase text-[#80acd0] mb-2">
+                순손익 합계
+              </div>
+              <div className={cn(
+                'text-[2.2rem] font-black font-mono tabular-nums leading-none',
+                netPnL > 0 ? 'text-red-400' : netPnL < 0 ? 'text-blue-400' : 'text-[#ecf5ff]',
+              )}>
+                {netPnL >= 0 ? '+' : ''}{fmt(netPnL)}
+                <span className="text-[14px] font-normal text-[#80acd0] ml-1.5">원</span>
+              </div>
+              {filteredPnL.invested > 0 && (
+                <div className={cn(
+                  'text-[13px] font-bold font-mono mt-1.5',
+                  periodRoiPct > 0 ? 'text-red-400' : periodRoiPct < 0 ? 'text-blue-400' : 'text-[#80acd0]',
+                )}>
+                  {periodRoiPct >= 0 ? '+' : ''}{periodRoiPct.toFixed(2)}%
+                  <span className="text-[9px] font-normal text-[#80acd0] ml-1.5">수익률</span>
+                </div>
+              )}
+
+              {/* 기간 탭 */}
+              <div className="flex gap-1 mt-4">
+                {(Object.keys(PERIOD_LABELS) as PeriodKey[]).map(k => (
+                  <button
+                    key={k}
+                    onClick={() => setPeriod(k)}
+                    className={cn(
+                      'px-2.5 py-1 rounded text-[10px] font-semibold transition cursor-pointer',
+                      period === k
+                        ? 'bg-[#1d6ef8] text-white'
+                        : 'text-[#80acd0] hover:text-[#ecf5ff] hover:bg-[#1e3a58]',
+                    )}
+                  >
+                    {PERIOD_LABELS[k]}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 우측 KPI 세로 블록 */}
+            <div className="flex flex-col divide-y divide-[#1e3a58] min-w-[160px]">
+              {([
+                {
+                  label: '평가손익',
+                  value: unrealizedAmt,
+                  sub: `${positions.length > 0 ? positions.length + '종목' : '—'}`,
+                  colored: true,
+                },
+                {
+                  label: '실현수익',
+                  value: filteredPnL.profit,
+                  sub: `${filteredPnL.tradeCount}건 완결`,
+                  colored: false,
+                  forceRed: true,
+                },
+                {
+                  label: '실현손실',
+                  value: -filteredPnL.loss,
+                  sub: '기간 누적',
+                  colored: false,
+                  forceBlue: true,
+                },
+                {
+                  label: '투자원금',
+                  value: totalInvested,
+                  sub: '현재 보유 기준',
+                  colored: false,
+                },
+              ]).map(({ label, value, sub, colored, forceRed, forceBlue }) => {
+                const cls = colored
+                  ? value > 0 ? 'text-red-400' : value < 0 ? 'text-blue-400' : 'text-[#ecf5ff]'
+                  : forceRed ? 'text-red-400'
+                  : forceBlue ? 'text-blue-400'
+                  : 'text-[#ecf5ff]';
+                return (
+                  <div key={label} className="flex-1 flex flex-col justify-center px-3 py-2">
+                    <div className="text-[9px] text-[#80acd0] mb-0.5">{label}</div>
+                    <div className={cn('text-[13px] font-bold font-mono tabular-nums', cls)}>
+                      {forceRed || (colored && value > 0) ? '+' : ''}{fmt(Math.abs(value))}
+                    </div>
+                    <div className="text-[9px] text-[#608ab0]">{sub}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* ── 거래 내역 ──────────────────────────────────────────────────── */}
+        <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg overflow-hidden">
+          <SectionHeader
+            icon={<Activity className="h-3.5 w-3.5" />}
+            title="거래 내역"
+            right={`${filteredTrades.length}건`}
+          />
+          {filteredTrades.length > 0 ? (
+            <>
+              {/* 테이블 헤더 */}
+              <div className="grid grid-cols-12 gap-0 px-3 py-1.5 border-b border-[#162e46] bg-[#11243c]">
+                {(['구분', '종목', '가격', '수량', '금액', '시간'] as const).map((h, i) => (
+                  <div key={h} className={cn(
+                    'text-[9px] font-semibold text-[#80acd0] uppercase tracking-wide',
+                    i === 0 ? 'col-span-1' : i === 1 ? 'col-span-3' : i === 2 ? 'col-span-2' :
+                    i === 3 ? 'col-span-1' : i === 4 ? 'col-span-2 text-right' : 'col-span-3 text-right',
+                  )}>
+                    {h}
+                  </div>
+                ))}
+              </div>
+              {/* 테이블 바디 */}
+              <div className="divide-y divide-[#162e46] max-h-[320px] overflow-y-auto">
+                {filteredTrades.map((t, i) => {
+                  const isBuy = t.type === 'BUY';
+                  return (
+                    <div key={i} className="grid grid-cols-12 gap-0 px-3 py-2 hover:bg-[#11243c] transition items-center">
+                      <div className="col-span-1">
+                        <span className={cn(
+                          'inline-flex items-center gap-0.5 text-[10px] font-bold',
+                          isBuy ? 'text-red-400' : 'text-blue-400',
+                        )}>
+                          {isBuy ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          {isBuy ? '매수' : '매도'}
+                        </span>
+                      </div>
+                      <div className="col-span-3">
+                        <span className="text-[11px] font-semibold text-[#ecf5ff]">
+                          {STOCK_NAMES[t.symbol] ?? t.symbol}
+                        </span>
+                        <div className="text-[8px] text-[#608ab0] font-mono">{t.symbol}</div>
+                      </div>
+                      <div className="col-span-2 text-[11px] font-mono tabular-nums text-[#d0e6f8]">
+                        {fmt(t.price)}
+                      </div>
+                      <div className="col-span-1 text-[11px] font-mono text-[#9ec4de]">
+                        {t.qty}주
+                      </div>
+                      <div className="col-span-2 text-right text-[10px] font-mono tabular-nums text-[#9ec4de]">
+                        {fmtCompact(t.price * t.qty)}
+                      </div>
+                      <div className="col-span-3 text-right text-[9px] font-mono text-[#80acd0]">
+                        {fmtTime(t.timestamp)}
                       </div>
                     </div>
                   );
                 })}
               </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-center py-10 text-[11px] text-[#608ab0]">
+              거래 내역 없음
             </div>
           )}
         </div>
-      )}
 
-      {/* ── 거래 내역 타임라인 ─────────────────────────────────────────────── */}
-      {filteredTrades.length > 0 && (
-        <div className="bg-white border border-[#e5e5e5] rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#f5f5f5]">
-            <span className="text-[9px] font-semibold tracking-[0.12em] uppercase text-[#a3a3a3]">거래 내역</span>
-            <span className="text-[9px] font-mono text-[#a3a3a3]">{filteredTrades.length}건</span>
+        {/* ── 미연결 상태 안내 (우측) ────────────────────────────────────── */}
+        {!anyActive && allTrades.length === 0 && (
+          <div className="bg-[#152e48] border border-[#1e3a58] rounded-lg p-6">
+            <div className="text-[11px] text-[#608ab0] leading-relaxed space-y-1">
+              <p className="text-[#80acd0] font-semibold">자동매매 연동 방법</p>
+              <p>① <span className="text-[#1d6ef8]">자동매매</span> 탭에서 KIS 또는 Toss 연결</p>
+              <p>② App Key / Secret / 계좌번호 입력</p>
+              <p>③ 코스피 TOP 20 자동매매 시작</p>
+            </div>
           </div>
-          <div className="divide-y divide-[#f7f7f7] max-h-[220px] overflow-y-auto">
-            {filteredTrades.slice().reverse().map((t, i) => (
-              <div key={i} className="flex items-center gap-3 px-4 py-2.5 hover:bg-[#fafafa] transition">
-                <div className={cn('h-1.5 w-1.5 rounded-full shrink-0 mt-0.5',
-                  t.type === 'BUY' ? 'bg-red-400' : 'bg-blue-400'
-                )} />
-                <div className="flex-1 min-w-0">
-                  <span className={cn('text-[10px] font-bold',
-                    t.type === 'BUY' ? 'text-red-600' : 'text-blue-600'
-                  )}>
-                    {t.type === 'BUY' ? '매수' : '매도'}
-                  </span>
-                  <span className="text-[10px] text-[#a3a3a3] ml-2">{fmtDateTime(t.timestamp)}</span>
-                </div>
-                <span className="text-[10px] font-mono font-semibold text-[#171717] shrink-0">
-                  {fmt(t.price)}<span className="text-[#a3a3a3] font-normal">원</span>
-                  <span className="text-[#d4d4d4] mx-1">×</span>
-                  {t.qty}주
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* ── 비활성 안내 ────────────────────────────────────────────────────── */}
-      {!anyActive && (
-        <div className="flex flex-col items-center gap-4 py-10">
-          <div className="h-14 w-14 rounded-2xl bg-[#f5f5f5] flex items-center justify-center">
-            <Bot className="h-6 w-6 text-[#a3a3a3]" />
-          </div>
-          <div className="text-center">
-            <p className="text-sm font-semibold text-[#171717]">자동매매 미연결</p>
-            <p className="text-xs text-[#a3a3a3] mt-1">KIS 탭에서 연결 후 자동매매를 시작하세요</p>
-          </div>
-        </div>
-      )}
+      </div>{/* end RIGHT MAIN */}
 
     </div>
   );
