@@ -27,6 +27,164 @@ function naverGet(url: string): Promise<Buffer> {
   });
 }
 
+/** Fetch from Yahoo Finance — no Naver-specific headers */
+function yahooGet(url: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    https.get(
+      url,
+      {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+          Accept: 'application/json, */*',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+        },
+      },
+      (res) => {
+        // Follow redirect (Yahoo sometimes 301-redirects)
+        if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+          yahooGet(res.headers.location as string).then(resolve).catch(reject);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      },
+    ).on('error', reject);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// US Stock (NASDAQ/NYSE) Proxy Plugin
+// Routes /api/us-stock/* → Yahoo Finance (CORS-free server-side)
+// ─────────────────────────────────────────────────────────────────────────────
+function usStockPlugin(): Plugin {
+  return {
+    name: 'us-stock-api',
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use(async (req, res, next) => {
+        const url = req.url ?? '';
+        if (!url.startsWith('/api/us-stock/')) { next(); return; }
+
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+
+        const sendErr = (code: number, msg: string) => {
+          res.statusCode = code;
+          res.end(JSON.stringify({ error: msg }));
+        };
+
+        try {
+          // ── GET /api/us-stock/batch/quotes?symbols=AAPL,MSFT,… ──────────
+          // Batch current prices for multiple symbols
+          if (url.startsWith('/api/us-stock/batch/quotes')) {
+            const qp  = new URLSearchParams(url.split('?')[1] ?? '');
+            const syms = qp.get('symbols') ?? '';
+            if (!syms) { sendErr(400, 'symbols required'); return; }
+
+            const yahooUrl = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(syms)}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,preMarketPrice,postMarketPrice`;
+            const buf  = await yahooGet(yahooUrl);
+            const data = JSON.parse(buf.toString('utf-8'));
+            const results = data?.quoteResponse?.result ?? [];
+
+            const prices: Record<string, number> = {};
+            for (const q of results) {
+              const sym = q.symbol as string;
+              // Use post-market or pre-market price if regular market is closed
+              const price = (q.regularMarketPrice as number)
+                ?? (q.postMarketPrice as number)
+                ?? (q.preMarketPrice as number)
+                ?? 0;
+              if (price > 0) prices[sym] = price;
+            }
+            res.end(JSON.stringify(prices));
+            return;
+          }
+
+          // ── GET /api/us-stock/:symbol/candles?count=N ────────────────────
+          // Daily OHLCV bars from Yahoo Finance chart API
+          const candleMatch = url.match(/^\/api\/us-stock\/([^/?]+)\/candles/);
+          if (candleMatch) {
+            const symbol = decodeURIComponent(candleMatch[1]).toUpperCase();
+            const qp    = new URLSearchParams(url.split('?')[1] ?? '');
+            const count = Math.min(Math.max(Number(qp.get('count') ?? '200'), 60), 500);
+            const range = count <= 80 ? '6mo' : count <= 160 ? '1y' : '2y';
+
+            const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=${range}&includePrePost=false`;
+            const buf  = await yahooGet(yahooUrl);
+            const data = JSON.parse(buf.toString('utf-8'));
+            const result = data?.chart?.result?.[0];
+            if (!result) { sendErr(404, `No Yahoo Finance data for ${symbol}`); return; }
+
+            const timestamps: number[]    = result.timestamp ?? [];
+            const quote = result.indicators?.quote?.[0] ?? {};
+            const opens:   (number|null)[] = quote.open   ?? [];
+            const highs:   (number|null)[] = quote.high   ?? [];
+            const lows:    (number|null)[] = quote.low    ?? [];
+            const closes:  (number|null)[] = quote.close  ?? [];
+            const volumes: (number|null)[] = quote.volume ?? [];
+
+            const candles = timestamps
+              .map((ts, i) => {
+                const d = new Date(ts * 1000);
+                const year  = d.getUTCFullYear();
+                const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+                const day   = String(d.getUTCDate()).padStart(2, '0');
+                const close = closes[i] ?? 0;
+                return {
+                  date:   `${year}${month}${day}`,
+                  open:   opens[i]   ?? close,
+                  high:   highs[i]   ?? close,
+                  low:    lows[i]    ?? close,
+                  close,
+                  volume: volumes[i] ?? 0,
+                };
+              })
+              .filter(c => c.close > 0)
+              .slice(-count);
+
+            res.end(JSON.stringify(candles));
+            return;
+          }
+
+          // ── GET /api/us-stock/:symbol/current ────────────────────────────
+          // Latest price for a single symbol
+          const currentMatch = url.match(/^\/api\/us-stock\/([^/?]+)\/current/);
+          if (currentMatch) {
+            const symbol   = decodeURIComponent(currentMatch[1]).toUpperCase();
+            const yahooUrl = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${symbol}&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,preMarketPrice,postMarketPrice,marketState`;
+            const buf  = await yahooGet(yahooUrl);
+            const data = JSON.parse(buf.toString('utf-8'));
+            const q    = data?.quoteResponse?.result?.[0];
+            if (!q) { sendErr(404, `No quote for ${symbol}`); return; }
+
+            const price = (q.regularMarketPrice as number)
+              ?? (q.postMarketPrice as number)
+              ?? (q.preMarketPrice as number)
+              ?? 0;
+            res.end(JSON.stringify({
+              symbol,
+              price,
+              change:        q.regularMarketChange        ?? 0,
+              changePercent: q.regularMarketChangePercent ?? 0,
+              preMarket:     q.preMarketPrice             ?? null,
+              postMarket:    q.postMarketPrice            ?? null,
+              marketState:   q.marketState                ?? 'UNKNOWN',
+            }));
+            return;
+          }
+
+          sendErr(404, `Unknown US-stock route: ${url}`);
+        } catch (e) {
+          console.error('[us-stock-api]', e);
+          sendErr(500, String(e));
+        }
+      });
+    },
+  };
+}
+
 /** Vite dev-server middleware that proxies Naver Finance APIs */
 function naverStockPlugin(): Plugin {
   return {
@@ -563,7 +721,7 @@ function kisApiPlugin(): Plugin {
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss(), naverStockPlugin(), tossApiPlugin(), kisApiPlugin()],
+    plugins: [react(), tailwindcss(), naverStockPlugin(), usStockPlugin(), tossApiPlugin(), kisApiPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

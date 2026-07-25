@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  LayoutDashboard, ShieldCheck, BarChart3, Activity, Code2, Layers,
+  LayoutDashboard, ShieldCheck, BarChart3, Activity, Code2, Layers, Globe,
   TrendingUp, TrendingDown, Minus, RefreshCw, Clock,
 } from 'lucide-react';
 import { BotConfig } from './types';
@@ -8,6 +8,7 @@ import DashboardPanel from './components/DashboardPanel';
 import TradingSimulator from './components/TradingSimulator';
 import BacktestPanel from './components/BacktestPanel';
 import ElephantPanel from './components/ElephantPanel';
+import NasdaqPanel from './components/NasdaqPanel';
 import InteractiveCodeViewer from './components/InteractiveCodeViewer';
 import SetupGuide from './components/SetupGuide';
 import KisVerificationPanel from './components/KisVerificationPanel';
@@ -20,7 +21,7 @@ import { Label } from './components/ui/label';
 import { Card, CardHeader, CardTitle, CardContent } from './components/ui/card';
 import { cn } from './lib/utils';
 
-type Tab = 'dashboard' | 'broker' | 'backtest' | 'elephant' | 'simulator' | 'reference';
+type Tab = 'dashboard' | 'broker' | 'nasdaq' | 'backtest' | 'elephant' | 'simulator' | 'reference';
 
 // ── Market Status Bar ─────────────────────────────────────────────────────────
 interface IndexData {
@@ -170,6 +171,7 @@ function StrategyConfig({ config, onChange }: { config: BotConfig; onChange: (k:
 const TABS: { id: Tab; icon: React.ReactNode; label: string; badge?: string }[] = [
   { id: 'dashboard',  icon: <LayoutDashboard className="h-3.5 w-3.5" />, label: '대시보드' },
   { id: 'broker',     icon: <ShieldCheck className="h-3.5 w-3.5" />,     label: '자동매매',  badge: 'KIS·Toss' },
+  { id: 'nasdaq',     icon: <Globe className="h-3.5 w-3.5" />,           label: '나스닥',    badge: 'US' },
   { id: 'backtest',   icon: <BarChart3 className="h-3.5 w-3.5" />,       label: '백테스트' },
   { id: 'elephant',   icon: <Layers className="h-3.5 w-3.5" />,          label: '엘리펀트',  badge: '5분봉' },
   { id: 'simulator',  icon: <Activity className="h-3.5 w-3.5" />,        label: '시뮬레이터' },
@@ -315,6 +317,11 @@ export default function App() {
         {/* Elephant: full-width (자체 설정 사이드바 포함) */}
         {activeTab === 'elephant' && (
           <ElephantPanel />
+        )}
+
+        {/* NASDAQ: full-width */}
+        {activeTab === 'nasdaq' && (
+          <NasdaqPanel />
         )}
 
         {/* Backtest / Simulator: sidebar + content */}
