@@ -1,0 +1,144 @@
+# 💻 코다리 (시니어 풀스택 엔지니어) 개인 메모리
+
+_코다리 에이전트만 읽고 쓰는 개인 노트. 학습·교훈·자주 쓰는 패턴이 누적됩니다._
+
+## 학습 기록
+
+- [2026-09-10] 분석된 트렌드 데이터를 입력값으로 받아 스크립트 초안을 자동 생성할 수 있는 Python 기반의 워크플로우 로직과 API 연동 설계를 진행하세요. → 산출물 sessions/2026-09-10T12-26/developer.md
+- [2026-09-10] 유튜브에서 추출된 메타데이터를 입력값으로 사용하여 인스타그램 릴스용 캡션과 해시태그를 자동 생성하고, 영상 업로드 스케줄을 관리할 수 있는 API 기반 워크플로우 로직을 설계하세요. → 산출물 sessions/2026-09-10T22-26/developer.md
+- [2026-09-14] Writer가 생성한 샘플 데이터를 입력값으로 받아, 규칙에 따라 콘텐츠 형식을 변환하는 Python 기반의 자동화 워크플로우 프로토타입 코드를 작성하세요. → 산출물 sessions/2026-09-14T12-41/developer.md
+- [2026-09-16] 유튜브 메타데이터를 기반으로 릴스뿐만 아니라 쇼츠 및 피드용 캡션을 각각 다른 포맷(길이, 이모지 활용도 등)으로 일괄 생성할 수 있도록 기존 파이썬 자동화 로직의 확장 설계안을 작성하세요. → 산출물 sessions/2026-09-16T10-56/developer.md
+- [2026-09-19] business 에이전트가 정의한 요구사항을 바탕으로, PayPal API 연동 로직과 티어별 결제 상태(Subscription/One-time)에 따른 권한 제어를 위한 데이터베이스 스키마 및 백엔드 아키텍처 설계안을 작성하세요. → 산출물 sessions/2026-09-19T06-41/developer.md
+- [2026-09-19] 최근 설계된 YouTube 메타데이터 변환 로직과 PayPal 연동 구조를 바탕으로, 플랫폼별(Shorts, Reels, Feed)로 캡션 및 해시태그를 자동 생성하는 Python 스크립트의 핵심 모듈을 구현하세요. → 산출물 sessions/2026-09-19T08-11/developer.md
+- [2026-09-29] YouTube API와 Instagram Graph API를 연동하여 영상 추출, 리사이징, 자동 업로드를 수행하는 기술 아키텍처 및 자동화 워크플로우 설계 → 산출물 sessions/2026-09-29T06-34/developer.md
+- [2026-10-15] PayPal API 인증 에러를 해결하고, $29 티어 결제 성공 시 즉시 사용자 권한이 활성화되는 Webhook/IPN 기반의 자동화 워크플로우를 구현하여 결제 전환 저해 요소를 제거하세요. → 산출물 sessions/2026-10-15T05-06/developer.md
+- [2026-11-13] React 기반의 단일 페이지 웹사이트를 생성하고, 1페이지에 제품 소개, 기능 리스트, 가격 플랜(무료·프리미엄) 섹션을 포함하도록 코드를 작성하십시오. 배포는 Vercel 혹은 Netlify에 연결하는 자동화 스크립트를 추가하세요. → 산출물 sessions/2026-11-13T07-35/developer.md
+- [2026-11-13] HTML/CSS 템플릿을 반응형 웹페이지로 구현하고, 간단한 JavaScript 로 애니메이션 효과와 폼 제출 이벤트를 추가 → 산출물 sessions/2026-11-13T08-50/developer.md
+- [2026-11-13] Python 기반으로 반복되는 데이터 수집 및 보고서 생성 스크립트 작성, GitHub Actions로 매일 아침 실행되도록 설정 → 산출물 sessions/2026-11-13T10-50/developer.md
+- [2026-11-13] Python/Node.js 기반 자동 스케줄러 개발: 인스타그램 게시물 예약, 유튜브 업로드 트리거, 매일 아침 6시에 실행되도록 cron 설정 및 API 인증 저장 → 산출물 sessions/2026-11-13T11-50/developer.md
+- [2026-11-13] Python으로 PayPal API를 이용해 지난 30일 매출 거래를 정리하고, 월별 합계 및 항목별 분류를 포함한 CSV 파일을 생성한다. 또한 GitHub Actions 워크플로우를 설정하여 매일 아침 6시에 실행되도록 한다. 스크립트와 워크플로우 파일은 각각 sessions/2026-11-13T22-00/developer.md에 저장해라 → 산출물 sessions/2026-11-13T12-20/developer.md
+- [2026-11-13] Python 기반으로 YouTube와 Instagram(릴스) 채널에 맞는 게시 일정 자동화 스크립트 작성. API 인증, 캘린더 연동, 이미지/영상 처리 로직 포함. 코드 주석과 사용 가이드 포함. → 산출물 sessions/2026-11-13T12-35/developer.md
+- [2026-11-13] 위 설계대로 Python 기반 스크립트를 작성하고, cron 혹은 Cloud Scheduler 로 일정에 따라 실행되도록 설정하며, 로그와 오류 알림을 포함하도록 구현한다. → 산출물 sessions/2026-11-13T13-35/developer.md
+- [2026-11-13] 인스타그램 Graph API를 활용한 자동화 스크립트 작성. 사용자 인증 토큰 관리, 영상 파일 업로드 및 캡션/해시태그 지정 기능 포함. 테스트 케이스와 CI 파이프라인 설정. → 산출물 sessions/2026-11-13T13-50/developer.md
+- [2026-11-13] 제안된 구독형 서비스를 구현하기 위한 MVP 프레임워크 설계, API 연동 스크립트 개발 계획 수립 → 산출물 sessions/2026-11-13T14-20/developer.md
+- [2026-11-13] Python 기반 자동화 스크립트를 설계하고, YouTube Shorts 및 Instagram Reels를 지정된 파일 경로에서 업로드하도록 구현. API 인증 토큰 관리, 메타데이터(제목·태그·캡션) 포함, 에러 로 → 산출물 sessions/2026-11-13T14-35/developer.md
+- [2026-11-13] OpenSea API와 DappRadar 웹 스크래핑을 연결해, 매일 NFT 거래량과 가격 변동 데이터를 수집·저장하는 파이프 → 자격증명 부족으로 차단됨
+- [2026-11-13] 비즈니스에서 제공한 가격 모델을 적용해 MVP API 엔드포인트를 구축하고, 결제 연동 테스트 스크립트 작성 → 산출물 sessions/2026-11-13T15-20/developer.md
+- [2026-11-13] Python으로 YouTube API(Analytics)와 Google Optimize 연동하여 A/B 실험 결과(시청 시간, 전환율 등)를 매일 정리하고 CSV/DB에 저장하는 자동화 스크립트를 구현하라. 스케줄러를 통해 00:05 UTC에 실행되도록 설정 → 산출물 sessions/2026-11-13T16-05/developer.md
+- [2026-11-13] business에서 정의한 최적 A/B 테스트 설정(광고 삽입 시점 및 길이)을 반영하도록 YouTube 자동 업로드 스크립트를 업데이트하고, 매일 실행되는 메타데이터 추적 로깅을 추가한다. → 산출물 sessions/2026-11-13T16-20/developer.md
+- [2026-11-13] 인스타그램(릴스/피드) 및 유튜브 영상 업로드 일정을 자동으로 생성하고, 하루 3회 게시를 위한 cronjob 설정. Slack에 완료 알림을 보내도록 구현. → 산출물 sessions/2026-11-13T16-50/developer.md
+- [2026-11-13] Python 기반 CLI 도구를 작성하여, YouTube Data API v3 를 사용해 지정된 파일을 업로드하고 제목/설명/태그를 설정하도록 구현하라. 로컬에 .env 파일에서 API 키와 인증 정보를 읽도록 하며, 업로드 진행 상황을 콘솔에 표시하고 완료 시 URL을 출력하도록 해. → 산출물 sessions/2026-11-13T17-35/developer.md
+- [2026-11-13] 가격 페이지 HTML/CSS/JS 업데이트: 기존 요금제 삭제, 신규 프리미엄, 스탠다드, 베이직 티어 추가. 각 티어에 대한 기능 설명, 가격 표시, CTA 버튼 연결. → 산출물 sessions/2026-11-13T17-50/developer.md
+- [2026-11-13] Python 스크립트 작성: YouTube, Instagram API에서 매일 조회수·구독자 변동 데이터 가져와 DB에 저장하고, 정리된 보고서를 PDF로 생성. → 산출물 sessions/2026-11-13T17-50/developer.md
+- [2026-11-13] Python 스크립트 작성: YouTube, Instagram API에서 매일 조회수·구독자 변동 데이터를 가져와 DB에 저장하고, 정리된 보고서를 PDF로 생성. 기존 설계 문서(agents/developer/goal.md)를 참고하여 코드 구조를 정의하고, 필요한 라이브러리와 환경설정 명세를 포함해 산출물(스크립트 파일 + README) 제공. → 산출물 sessions/2026-11-13T18-05/developer.md
+- [2026-11-13] 인스타그램 업로드 스케줄을 2026-11-20 주간 계획에 맞춰 자동화 파이프라인에 반영하고, Instagram Graph API와의 연결 테스트를 수행하여 성공 여부를 리포트한다. → 산출물 sessions/2026-11-13T18-20/developer.md
+- [2026-11-13] Python 스크립트 'youtube_api_test.py' 실행 후 성공 여부와 에러 로그를 확인하고, 정상 동작 시 인증 토큰 유효성 및 채널 ID 조회가 가능한지 검증하세요. 결과는 간단한 JSON 형태로 리포트해 주세요. → 산출물 sessions/2026-11-13T19-05/developer.md
+- [2026-11-13] Instagram Graph API를 이용해 주간 릴스 포스트 예약 기능을 구현하고, 테스트용 스크립트와 문서 생성 → 산출물 sessions/2026-11-13T19-50/developer.md
+- [2026-11-13] Instagram Graph API를 이용해 주간 릴스 포스트 예약 기능을 구현하고, 테스트용 스크립트와 문서 생성 및 성공 여부를 JSON 리 → 산출물 sessions/2026-11-13T20-20/developer.md
+- [2026-11-13] config.yaml 파일에 YOUTUBE_API_KEY와 YOUTUBE_CHANNEL_ID를 추가하고, 저장한다. 파일 경로: ./config.yaml → 산출물 sessions/2026-11-13T20-50/developer.md
+- [2026-11-13] 설계에 따라 KPI 대시보드 프론트엔드 구현, API 연동 테스트 → 산출물 sessions/2026-11-13T20-50/developer.md
+- [2026-11-13] PDF 리포트 초안을 받아 자동화 스크립트를 통해 실시간 데이터(구독자 수, 인스타 인게이지먼트 등)를 삽입하고, 완료된 리포트를 지정한 Slack 채널에 전송하도록 설정한다. → 산출물 sessions/2026-11-13T21-05/developer.md
+- [2026-11-13] Instagram Graph API를 이용해 매주 월·수·금에 15초 길이의 ‘오늘의 팁’ 릴스를 예약 업로드하는 파이썬 스크립트를 설계하고, 실행 가능한 예시 코드를 제공하라. 스크립트는 access_token 관리, 게시물 생성, 예약시간 설정, 에러 로깅을 포함해야 한다. → 산출물 sessions/2026-11-13T21-50/developer.md
+- [2026-11-13] 코다리에게 Instagram Graph API 예약 업로드 스크립트(예시 코드 포함)를 실행하여 정상 작동 여부를 확인하고, 오류가 발생하면 상세 로그와 함께 해결 방안을 제안하도록 지시한다. → 산출물 sessions/2026-11-13T22-05/developer.md
+- [2026-11-13] YouTube Data API를 사용해 업로드 예정 영상 목록을 가져오고, 지정된 시간에 자동으로 업로드되는 파이썬 스크립트를 작성하라. 스크립트는 비디오 파일 경로와 메타데이터(제목, 설명, 태그)를 읽어 올 수 있어야 하며, 오류 발생 시 로그를 기록하도록 구현해라. → 산출물 sessions/2026-11-13T22-50/developer.md
+- [2026-11-13] 현재 YouTube Data API 키와 채널 ID를 사용해, 지정된 폴더에서 비디오 파일과 매칭되는 메타데이터(제목·설명·태그) 파일을 읽고, 해당 비디오를 업로드하는 파이썬 스크립트를 작성하라. 업 → 산출물 sessions/2026-11-13T23-20/developer.md
+- [2026-11-14] Python/Go를 이용해 YouTube Data API 호출 및 결과를 JSON으로 저장, cron 스케줄러 설정하여 매일 자정에 실행 → 산출물 sessions/2026-11-14T00-05/developer.md
+- [2026-11-14] YouTube Data API 스크립트를 실행 가능한 형태로 패키징하고, cron job을 설정하여 매일 자정에 자동으로 지정 폴더에서 비디오를 찾아 업로드하도록 테스트해라. 스크립트와 크론 설정 파일은 모두 Git 저장소에 커밋하고, 로그 파일이 생성되는지 확인하라. → 산출물 sessions/2026-11-14T00-20/developer.md
+- [2026-11-14] YouTube Data API를 사용해 지정 폴더에서 비디오와 메타데이터를 읽고, 비디오를 업로드하도록 → 산출물 sessions/2026-11-14T00-35/developer.md
+- [2026-11-14] 크론(리눅스) 혹은 Windows Task Scheduler를 사용하여 매일 자정에 ~/dev/youtube_uploader/upload_video.py 를 실행하도록 설정하고, 로그 파일을 생성해 정상 동작 여부를 확인하라. → 산출물 sessions/2026-11-14T00-50/developer.md
+- [2026-11-14] YouTube Data API를 이용해 지정 폴더에서 비디오와 메타데이터를 읽고, 매일 자정에 실행되는 크론 작업을 설정하여 동영상을 자동으로 업로드하도록 파이썬 스크립트를 작성하고, Git 저장소에 커밋하며 로그 파일 생성 여부를 확인하라 → 산출물 sessions/2026-11-14T02-35/developer.md
+- [2026-11-14] 캠페인 로드맵에 따라 Slack/Telegram 자동화 스크립트와 웹훅 설정, 배포 환경 구성 → 산출물 sessions/2026-11-14T03-05/developer.md
+- [2026-11-14] 기존 웹사이트에 정적 프론트엔드 페이지를 추가하고, Stripe 결제 연동 API 설정. 테스트 결제를 위해 테스트 키와 실결제 환경 구분을 명시해 주고, 배포 전 자동화된 테스트 스크립트를 실행. → 산출물 sessions/2026-11-14T03-05/developer.md
+- [2026-11-14] 위 디자인을 바탕으로 반 → 산출물 sessions/2026-11-14T03-50/developer.md
+- [2026-11-14] 새로운 가격 모델에 따라 웹사이트의 결제 페이지와 API 엔드포인트를 업데이트하며, A/B 테스트용 트래픽 라우팅을 설정하라. → 산출물 sessions/2026-11-14T04-05/developer.md
+- [2026-11-14] 해당 프리미엄 가격을 사이트 결제 페이지와 API에 반영하고, 변동이 적용된 테스트를 수행해 정상 동작 여부를 확인. → 산출물 sessions/2026-11-14T04-05/developer.md
+- [2026-11-14] 구독 기반 서비스 가격 재설정 페이지를 구현하고, Stripe 결제 API와 연결하여 A/B 테스트용 트래픽 라우팅 설정. 코드 커밋과 Vercel 배포까지 완료. → 산출물 sessions/2026-11-14T04-22/developer.md
+- [2026-11-14] PDF 파일을 정적 웹사이트(예: Vercel)에서 제공되는 경로에 업로드하고, 해당 URL을 반환하도록 API 엔드포인트를 구현하세요. 필요 시 S3 또는 Cloudinary 같은 CDN 사용. URL은 관리자 페이지와 이메일 뉴스레터에도 삽입될 수 있도록 합니다. → 산출물 sessions/2026-11-14T06-37/developer.md
+- [2026-11-14] 프리미엄 구독 가격을 $29로 업데이트하고, Stripe 결제 API를 사용해 새로운 가격 모델을 적용한 뒤 A/B 테스트용 라우팅을 활성화하세요. 변경 사항은 Git에 커밋하고 Vercel에 배포합니다. → 산출물 sessions/2026-11-14T08-22/developer.md
+- [2026-11-14] Stripe 결제 API를 사용해 새로운 가격 모델을 적용하고 A/B 테스트용 라우팅 설정을 구현한 뒤 Vercel에 배포 → 산출물 sessions/2026-11-14T10-52/developer.md
+- [2026-11-14] Stripe 결제 API를 사용해 두 가지 가격 모델(기존 $29, 인상 버전)을 각각 별도 엔드포인트에서 제공하도록 라우팅 설정 구현하고 Vercel에 배포. 테스트용 토픽과 로그 기록 포함. → 산출물 sessions/2026-11-14T11-07/developer.md
+- [2026-11-14] Stripe Webhook 설정(‘invoice.payment_succeeded’, ‘customer.subscription.deleted’), A/B 라우팅 로직 추가 및 Vercel 배포 준비. 필요 시 테스트 스크립트와 로그 수집을 포함해 완전한 배포 패키지를 생성. → 산출물 sessions/2026-11-14T11-22/developer.md
+- [2026-11-14] Stripe Webhook(‘invoice.payment_succeeded’, ‘customer.subscription.deleted’)를 → 산출물 sessions/2026-11-14T11-22/developer.md
+- [2026-11-14] React 기반의 단일 페이지 랜딩 템플릿(헤더, 소개 섹션, CTA, FAQ)을 만들고, 프로젝트 초기화 후 README와 기본 파일을 포함하여 리포지토리로 push해라. → 산출물 sessions/2026-11-14T18-37/developer.md
+- [2026-11-14] React 기반 단일 페이지 랜딩 템플릿(헤더, 소개 섹션, CTA, FAQ)을 초기화하고 README와 기본 파일 포함해 GitHub 리포지토리 생성 후 S3에 배포 가능한 빌드 아카이브 업로드 → 산출물 sessions/2026-11-14T18-52/developer.md
+- [2026-11-14] React 기반 단일 페이지 랜딩 템플릿을 초기화하고 헤더, 소개 섹션, CTA, FAQ를 포함한 기본 파일 구조를 구현하며, GitHub 리포지토리를 만들고 S3에 배포 가능한 빌드 아카이브를 업로드하십시오. 완료 시 URL과 커밋 메시지를 제공해 주세요. → 산출물 sessions/2026-11-14T19-07/developer.md
+- [2026-11-14] React 기반 단일 페이지 랜딩 템플릿을 초기화하고, 헤더, 소개 섹션, CTA, FAQ를 포함한 기본 파일 구조를 만들며 README와 함께 GitHub 리포지토리를 생성하고, 빌드 후 S3에 업로드 가능한 아카이브를 준비하라. → 산출물 sessions/2026-11-14T19-07/developer.md
+- [2026-11-14] Dashboard Kit 구조를 활용해 비즈니스 KPI(월 매출, CAC, LTV 등)를 시각화하는 React SPA를 생성하고 GitHub 리포지토리와 S3 배포 준비 → 산출물 sessions/2026-11-14T21-37/developer.md
+- [2026-11-14] 재무 원본 CSV(~/Downloads/financial_data_2026-10.csv)를 파이썬으로 정제하고, 월 매출, CAC, LTV 등 핵심 KPI를 계산하는 스크립트를 작성하여 dashboard_requirements.md에 명세 및 샘플 코드 포함 → 산출물 sessions/2026-11-14T22-22/developer.md
+- [2026-11-14] business가 제공한 KPI 정의서를 바탕으로 dashboard_require → 산출물 sessions/2026-11-14T22-22/developer.md
+- [2026-11-14] dashboard_requirements.md에 월 매출, CAC, LTV 등 핵심 KPI 정의와 계산 공식 포함하여 명세 및 샘플 코드 작성 → 산출물 sessions/2026-11-14T22-37/developer.md
+- [2026-11-14] youtube_api_config.py 파일을 생성하고, YOUTUBE_API_KEY와 YOUTUBE_CHANNEL_ID 환경 변수를 읽어 설정 파일로 저장하라. 설정이 완료되면 성공 메시지를 출력한다. → 산출물 sessions/2026-11-14T23-07/developer.md
+- [2026-11-15] dashboard_requirements.md에 정의된 월 매출, CAC, LTV 등 핵심 KPI와 계산 공식을 포함해 Python/Streamlit 기반 대시보드 스켈레톤을 작성하고, GitHub 리포지토리 초기화 후 README에 사용법을 기록하라. → 산출물 sessions/2026-11-15T00-07/developer.md
+- [2026-11-15] dashboard_requirements.md 파일에 명시된 월 매출, CAC, LTV 계산 공식을 코드화하여 Python 함수로 작성하고, 테스트 케이스 포함. 결과는 → 산출물 sessions/2026-11-15T00-07/developer.md
+- [2026-11-15] dashboard_requirements.md에 정의된 월 매출, CAC, LTV 계산 공식을 코드로 구현하고, 간단한 Streamlit 인터페이스를 추가하여 KPI 값을 입력하면 실시간으로 계산·시각화되는 대시보드 스켈레톤을 만들고 GitHub 리포지토리 초기화 후 README에 사용법 기록 → 산출물 sessions/2026-11-15T00-37/developer.md
+- [2026-11-15] Python/Streamlit 기반의 월 매출, CAC, LTV 등 핵심 KPI와 계산 공식을 포함한 대시보드 스켈레톤을 작성하고, GitHub 리포지토리 초기화 후 README에 사용법을 기록하라. → 산출물 sessions/2026-11-15T00-37/developer.md
+- [2026-11-15] dashboard_requirements.md에 정의된 월 매출, CAC, LTV 계산 공식을 Python 함수로 구현하고, 간단한 Streamlit 인터페이스를 추가해 KPI 입력 시 실시간 계산·시각화하도록 대시보드 스켈레톤을 완성하세요. GitHub 리포지토리를 새로 초기화하고 README에 사용법과 실행 방법(가상환경 설정, → 산출물 sessions/2026-11-15T00-52/developer.md
+- [2026-11-15] dashboard_requirements.md에 정의된 월 매출, CAC, LTV 계산 공식을 Python 함수로 구현하고, 간단한 Streamlit 인터페이스를 추가해 KPI 입력 시 실시간 계산·시각화하도록 대시보드 스켈레톤을 완성하세요. GitHub 리포지토리를 새로 초기화하고 README에 사용법과 실행 방법(가상환경 설정 포함)을 기록합니다. → 산출물 sessions/2026-11-15T01-07/developer.md
+- [2026-11-15] Python 기반 Django/Flask 애플리케이션을 작성하여 인스타그램 API와 연동해, 주어진 일정에 따라 자동으로 릴스 업로드를 수행하도록 하는 REST 엔드포인트와 배치 작업 스크립트 구현. 필요 시 OAuth 토큰 갱신 로직 포함. → 산출물 sessions/2026-11-15T01-52/developer.md
+- [2026-11-15] instagram_uploader/upload_worker.py를 완성하여 OAuth 토큰 갱신 로직과 이미지/릴스 업로드 API 호출을 구현하고, 테스트 로그를 sessions/2026-11-15T???.md 에 기록하도록 해라 → 산출물 sessions/2026-11-15T02-07/developer.md
+- [2026-11-15] upload_worker.py에 OAuth 토큰 갱신 로직과 인스타그램 Graph API를 이용한 릴스 영상 업로드 함수를 구현하고, 필요 시 예외 처리와 로그 출력을 추가하십시오. 스크립트가 실행될 때 현재 유효한 액 → 산출물 sessions/2026-11-15T02-07/developer.md
+- [2026-11-15] Python Flask 앱을 만들고, YouTube Data API 키와 채널 ID를 사용해 구독자 수, 조회수, 최근 30일 동영상 목록을 가져온 뒤 간단한 HTML 페이지에 표시하도록 구현하라. 필요 시 환경 변수로 인증 정보를 관리하고, 테스트용 로그를 sessions/2026-11-15T???.md 에 기록하도록 해라. → 산출물 sessions/2026-11-15T02-22/developer.md
+- [2026-11-15] instagram_uploader/upload_worker.py 파일을 실행해 OAuth 토큰 갱신과 릴스 업로드 함수가 정상 동작하는지 확인하고, 성공/실패 로그를 sessions//developer.md에 기록하라. 필요한 경우 예외 처리와 재시도 로직을 추가한다. → 산출물 sessions/2026-11-15T03-37/developer.md
+- [2026-11-15] instagram_uploader/upload_worker.py 파일을 실행해 OAuth 토큰 갱신과 릴스 업로드 함수가 정상 동작하는지 확인하고, 성공/실패 로그를 sessions//developer.md에 기록하라. 필요 시 예외 처리와 재시도 로직을 추가한다. → 산출물 sessions/2026-11-15T03-52/developer.md
+- [2026-11-15] Python 스크립트를 작성하여 매일 아침 9시에 현재 채널의 기본 통계(구독자, 조회수, 최근 영상 리스트)를 가져와서 Slack에 전송하고, 결과를 sessions/2026-11-15T???.md 파일로 저장하도록 cron job 설정. 인증 정보는 환경 변수에서 읽도록 하 → 산출물 sessions/2026-11-15T04-37/developer.md
+- [2026-11-15] Instagram Graph API로 게시물 예약 기능을 추가하고, 토큰 갱신 및 오류 처리 로직 포함. 매일 아침 9시에 현재 채널의 기본 통계(구독자, 조회수, 최근 영상 리스트)를 Slack에 전송하도록 cron job 설정. 결과를 sessions/2026-11-15T04-52/developer.md 파일로 저장. → 산출물 sessions/2026-11-15T05-07/developer.md
+- [2026-11-15] Instagram Graph API 인증 흐름(액세스 토큰 갱신), 게시물 예약 엔드포인트 호출 로직을 포함한 파이썬 스크립트 작성. 스크립트는 매일 오전 9시에 실행되어 현재 채널의 예정 포스트를 조회하고, 지정된 시간에 자동으로 업로드하도록 한다. 오류 시 재 → 산출물 sessions/2026-11-15T05-07/developer.md
+- [2026-11-15] Python 스크립트 작성: 1) YOUTUBE_API_KEY 와 YOUTUBE_CHANNEL_ID를 → 산출물 sessions/2026-11-15T05-52/developer.md
+- [2026-11-15] Python 스크립트를 작성하고 crontab에 등록하여 매일 오전 9시에 YOUTUBE_API_KEY와 YOUTUBE_CHANNEL_ID를 사용해 구독자 수, 총 조회수, 최근 영상 목록(제목·업로드 날짜) 를 가져오고 Slack Webhook으로 JSON 형태로 전송하도록 구현 → 산출물 sessions/2026-11-15T06-07/developer.md
+- [2026-11-15] Python 스크립트 작성: (1) YOUTUBE_API_KEY와 YOUTUBE_CHANNEL_ID를 환경 변수에서 읽어오고, YouTube Data API v3를 호출해 현재 구독자 수, 총 조회수 및 최근 5개의 영상(제목, ID, 공개 일자)를 가져온다. (2) Slack Webhook URL을 이용해 JSON 포맷으로 메시지를 전송한다. (3) 크론탭 파일 예 → 산출물 sessions/2026-11-15T06-07/developer.md
+- [2026-11-15] Python 스크립트인 youtube_stats.py 를 실행하여 현재 구독자 수, 총 조회수 및 최근 영상 목록을 가져오고, 이를 JSON 형태로 Slack Webhook URL에 POST 요청하십시오. 실행 결과를 로그 파일(예: youtube_stats.log)에도 저장하세요. → 산출물 sessions/2026-11-15T06-22/developer.md
+- [2026-11-15] Python 스크립트를 작성해 Instagram Graph API 액세스 토큰을 자동으로 갱신하고, publish_video 권한이 있는지 확인하며, 실패 시 Slack Webhook에 알림을 보내도록 하세요. 인증 흐름은 OAuth 2.0 Client Credentials Grant를 사용하고, 새 토큰은 ~/.config/instagram/token.json에 저장하도록 구현. → 산출물 sessions/2026-11-15T06-52/developer.md
+- [2026-11-15] Python 스크립트를 작성해 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰이 ~/.config/instagram/token.json에 저장되도록 구현하세요. 또한 publish_video 권한이 있는지 확인하고, 실패 시 Slack Webhook URL(환경 변수 SLACK_WEBHOOK_URL에 설정)로 에러 알림을 전송하도록 하세요. → 산출물 sessions/2026-11-15T07-07/developer.md
+- [2026-11-15] Python 스크립트를 작성해 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰이 ~/.config/instagram/token.json에 저장되도록 구현하세요. 또한 publish_video 권한이 있는지 확인하고, 실패 시 Slack Webhook URL(환경 변수 SLACK_WEBHOOK_URL에 설정)로 에러 알림을 전송하도록 하세요. → 산출물 sessions/2026-11-15T07-22/developer.md
+- [2026-11-15] Python으로 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰이 ~/.config/instagram/token.json에 저장되도록 구현하세요. 동시에 publish_video 권한이 있는지 확인하고, 실패 시 Slack Webhook URL(환경 변수 SLACK_WEBHOOK_URL)에 에러 알림을 전송하도록 하세요 → 산출물 sessions/2026-11-15T07-52/developer.md
+- [2026-11-15] Python 스크립트를 작성해 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰은 ~/.config/instagram/token.json에 저장하도록 구현하세요 → 산출물 sessions/2026-11-15T07-52/developer.md
+- [2026-11-15] Python으로 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰은 ~/.config/instagram/token.json에 저장하도록 구현합니다. 동시에 publish_video 권한이 있는지 확인하며, 실패 시 SLACK_WEBHOOK_URL 환경 변수에 에러 알림을 전송하세요. → 산출물 sessions/2026-11-15T08-07/developer.md
+- [2026-11-15] Python으로 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰을 ~/.config/instagram/token.json에 저장하며 publish_video 권한이 있는지 확인해 실패 시 SLACK_WEBHOOK_URL로 에러 → 산출물 sessions/2026-11-15T08-07/developer.md
+- [2026-11-15] run ./schedule_reels.sh and confirm success → 산출물 sessions/2026-11-15T10-07/developer.md
+- [2026-11-15] Python으로 Instagram Graph API 액세스 토큰을 OAuth 2.0 Client Credentials Grant 방식으로 자동 갱신하고, 새 토큰은 ~/.config/instagram/token.json에 저장하며 publish_video 권한이 있는지 확인해 실패 시 SLACK_WEBHOOK_URL 환경 변수에 에러 알림을 전송하도록 구현하라 → 산출물 sessions/2026-11-15T10-22/developer.md
+- [2026-11-15] run ./schedule_reels.sh and confirm success → 산출물 sessions/2026-11-15T11-22/developer.md
+- [2026-11-15] run ./schedule_reels.sh and confirm success → 산출물 sessions/2026-11-15T12-22/developer.md
+- [2026-11-15] run ./schedule_reels.sh and verify success → 산출물 sessions/2026-11-15T18-52/developer.md
+- [2026-11-15] Run the Instagram Graph API reservation script to publish the scheduled reels and feed posts from the previously generated calendar. Ensure the access token is valid and handle any errors by logging them to a file. → 산출물 sessions/2026-11-15T18-52/developer.md
+- [2026-11-15] 실행 스크립트 ./schedule_reels.sh 2>&1 | tee -a sessions/2026-11-15T18-22/schedule_reels.log, 오류가 발생하면 로그 파일을 확인하고 문제를 해결하도록 보고 → 산출물 sessions/2026-11-15T19-22/developer.md
+- [2026-11-15] 실행 ./schedule_reels.sh 2>&1 | tee -a sessions/$(date +%Y-%m-%dT%H-%M)/schedule_reels.log 를 수행하고, 발생한 오류가 있으면 상세 로그 파일을 확인해 보고서로 전달하라. → 산출물 sessions/2026-11-15T19-22/developer.md
+- [2026-11-15] 오류 로그를 확인하고, 필요한 환경(모델 로드, 서버 상태) 점검 후 ./schedule_reels.sh 를 정상적으로 실행하도록 수정 및 재시도 → 산출물 sessions/2026-11-15T19-37/developer.md
+- [2026-11-15] 오류 로그를 확인하고, 필요한 환경(모델 로드, 서버 상태) 점검 후 ./schedule_reels.sh 를 정상적으로 실행하도록 수정 및 재시도 → 산출물 sessions/2026-11-15T19-52/developer.md
+- [2026-11-15] 실행 ./schedule_reels.sh 2>&1 | tee -a sessions/$(date +%Y-%m-%dT%H-%M)/schedule_reels.log 를 수행하고, 발생한 오류가 있으면 상세 로그 파일을 확인해 보고서로 전달하십시오. → 산출물 sessions/2026-11-15T20-07/developer.md
+- [2026-11-15] ./schedule_reels.sh 실행하고, 발생한 오류가 있으면 상세 로그를 확인해 보고서로 전달 → 산출물 sessions/2026-11-15T20-07/developer.md
+- [2026-11-15] 현재 'schedule_reels.sh' 실행 로그를 확인하고, 발생한 에러 원인을 분석 후 해결 방안을 제시하세요. 필요 시 스크립트를 수정하고 재실행하여 정상 동작을 검증하십시오. → 산출물 sessions/2026-11-15T20-22/developer.md
+- [2026-11-15] 현재 'schedule_reels.sh' 실행 로그를 확인해 에러 원인을 분석하고, 필요 시 스크립트를 수정한 뒤 재실행하여 정상 동작을 검증하라. → 산출물 sessions/2026-11-15T20-37/developer.md
+- [2026-11-15] 현재 'schedule_reels.sh' 실행 로그를 확인하고, 발생한 에러 원인을 분석 후 해결 방안을 제시하세요. 필요 시 스크립트를 수정하고 재실행하여 정상 동작을 검증하십시오. → 산출물 sessions/2026-11-15T20-37/developer.md
+- [2026-11-15] schedule_reels.sh 실행 로그를 확인하고, 에러 원인을 분석한 뒤 필요한 수정을 적용해 재실행하여 정상 동작 여부를 검증하라. → 산출물 sessions/2026-11-15T21-37/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 발생한 에러 원인을 파악 후 수정안을 제시하며 재실행을 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T21-37/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. → 산출물 sessions/2026-11-15T21-52/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 발생한 에러 원인을 파악 후 수정안을 제시하며 재실행을 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T21-52/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T22-07/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T22-07/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T22-22/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T23-22/developer.md
+- [2026-11-15] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-15T23-37/developer.md
+- [2026-11-16] schedule_reels.sh 로그를 확인하고, 에러 원인을 파악 후 수정안을 제시하며 재실행해 정상 동작 여부를 검증하라. 필요 시 스크립트를 업데이트하여 정상 동작을 보장한다. → 산출물 sessions/2026-11-16T00-22/developer.md
+- [2026-11-16] Meta Graph API 키를 안전하게 저장한 뒤, instagram.md를 활용해 예약 스케줄링 자동화를 위한 스크립트(예: schedule_instagram.sh)를 생성하고 테스트한다. → 산출물 sessions/2026-11-16T01-22/developer.md
+- [2026-11-16] schedule_reels.sh를 Meta Graph API 토큰으로 재구성하고, 자동 예약 기능이 정상 동작하는지 검증한 뒤 결과 로그를 반환하시오. → 산출물 sessions/2026-11-16T02-52/developer.md
+- [2026-11-16] Python으로 인스타그램 Graph API를 사용해 주어진 JSON 스케줄(리스트) 파일을 읽고, 각 릴스와 피드 포스트를 지정된 KST 날짜·시간에 예약 게시하도록 자동화 스크립트를 작성하라. 필요한 인증 토큰과 엔드포인트는 환경변수에서 불러오며, 실패 시 재시도 로직(최대 3회) 포함하고, 성공/실패 로그를 콘솔에 출력하도록 구현하라. → 산출물 sessions/2026-11-16T09-07/developer.md
+- [2026-11-16] Python으로 Instagram Graph API를 사용하여 주어진 릴스와 피드 포스트를 자동 예약하는 스크립트 작성. 스크립트는 API 인증, 이미지/비디오 업로드, 캡션 및 해시태그 지정, 예약 시간 설정을 포함해야 하며, 오류 처리 및 재시도 로직을 구현한다. → 산출물 sessions/2026-11-16T09-07/developer.md
+- [2026-11-16] Python으로 인스타그램 Graph API를 사용하여 주어진 JSON 일정 파일(예: sessions/2026-12-01_to_31_schedule.json)을 읽고, 각 릴스와 피드 포스트에 대해 예약 게시 요청을 보내는 스크립트를 작성하라. 토큰과 엔드포인트는 환경변수에서 가져오며, 실패 시 재시도 로직(3회) 포함하고, 성공/실패 로그를 콘솔에 출력하도록 구현하라. → 산출물 sessions/2026-11-16T09-37/developer.md
+- [2026-11-16] Python으로 위 인스타그램 예약 스크립트를 작성하라. 인증 토큰과 엔드포인트는 환경변수에서 불러오며, 성공/실패 로그를 콘솔에 출력하고, 최종 스크립트 파일을 sessions/2026-11-16T???.py 경로에 저장한다. → 산출물 sessions/2026-11-16T10-22/developer.md
+- [2026-11-16] 위에서 정의한 Instagram Graph API 호출 로직을 Python 코드로 작성하고, 테스트용 모의 데이터와 함께 실행해 보이며, 로그를 파일에 저장하도록 합니다. → 산출물 sessions/2026-11-16T11-07/developer.md
+- [2026-11-16] 실행 명령어 `python "c:\Users\user\MelatoninApp\sessions\instagram_scheduler.py"` 를 수행하여 모든 미게시 인스타그램 릴스·피드 포스트를 예약하고, 성공/실패 로그를 sessions/instagram_run_log.txt에 기록하도록 하세요. 스크립트가 실패하면 3회 재시도 로직을 포함해 다시 실행합니다. → 산출물 sessions/2026-11-16T13-22/developer.md
+- [2026-11-16] python "c:\Users\user\MelatoninApp\sessions\instagram_scheduler.py" 를 실행하여 모든 미게시 인스타그램 릴스·피드 포스트를 예약하고, 성공/실패 로그를 sessions/instagram_run_log.txt에 저장하도록 하세요. 스크립트가 실패하면 3회 재시도 로직을 포함해 다시 실행합니다. → 산출물 sessions/2026-11-16T13-37/developer.md
+- [2026-11-16] instagram_schedule_2026-10-20_to_26.json 파일을 읽어 각 포스트에 대해 인스타그램 Graph API를 호출하여 예약 요청을 보낸 뒤, 성공 여부와 에러 메시지를 sessions/instagram_run_log.txt에 기록하라. 재시도는 최대 3회 포함하고 로그에는 타임스탬프와 결과 상태를 명시한다. → 산출물 sessions/2026-11-16T14-07/developer.md
+- [2026-11-16] python "c:\Users\user\MelatoninApp\sessions\instagram_scheduler.py" 를 수행하여 모든 미게시 인스타그램 릴스·피드 포스트를 예약하고, 성공/실패 로그를 sessions/instagram_run_log.txt에 기록하도록 하세요. 스크립트가 실패하면 3회 재시도 로직을 포함해 다시 실행합니다. → 산출물 sessions/2026-11-16T15-37/developer.md
+- [2026-11-16] cd "C:\Users\user\MelatoninApp\sessions" && for i in {1..3}; do python instagram_scheduler.py && break; done → 산출물 sessions/2026-11-16T15-52/developer.md
+- [2026-11-16] 현재 디렉터리에서 instagram_schedule_2026-10-20_to_26.json 파일을 읽어 각 포스트에 대해 Instagram Graph API 호출을 수행하고, 성공 여부와 에러 메시지를 sessions/instagram_run_log.txt에 타임스탬프와 함께 기록하라. 재시도는 최대 3회 포함한다. → 자격증명 부족으로 차단됨
+- [2026-11-16] instagram_scheduler.py 파일이 존재하는지 확인하고, 존재하면 현재 디렉터리에서 python instagram_scheduler.py 를 실행하여 결과를 sessions/instagram_run_log.txt 에 기록하세요. 파일이 없으면 스크립트 틀을 생성해 주세요. → 산출물 sessions/2026-11-16T16-07/developer.md
+- [2026-11-16] cd "C:\Users\user\MelatoninApp\sessions" && python instagram_scheduler.py --start-date 2026-11-18 --end-date 2026-11-24 → 산출물 sessions/2026-11-16T16-52/developer.md
+- [2026-11-16] instagram_scheduler.py 를 --start-date 2026-11-18 --end-date 2026-11-24 로 다시 실행하고, 결과 로그를 sessions/2026-11-18_to_24_instagram_run_log.txt 에 저장한다. 실패 시 재시도 로직을 포함해 최종 성공 여부를 확인하도록 한다. → 산출물 sessions/2026-11-16T17-07/developer.md
+- [2026-11-16] 지정된 날짜 범위(2026-11-18 ~ 2026-11-24)로 instagram_scheduler.py 를 다시 실행해 인스타그램 Graph API 예약 요청을 수행하고, 결과 로그를 sessions/2026-11-18_to_24_instagram_run_log.txt 에 저장하도록 하세요. 오류 메시지가 발생하면 원인 분석 후 재시도 로직을 포함합니다. → 산출물 sessions/2026-11-16T17-07/developer.md
+- [2026-11-16] instagram_scheduler.py 를 --start-date 2026-11-18 --end-date 2026-11-24 로 실행하고, 결과 로그를 session 파일에 저장하라. → 산출물 sessions/2026-11-16T18-07/developer.md
+- [2026-11-16] cd "C:\Users\user\MelatoninApp\sessions" && python instagram_scheduler.py --start-date 2026-11-30 --end-date 2026-12-06 → 산출물 sessions/2026-11-16T18-07/developer.md
+- [2026-11-16] 현재 프로젝트 디렉터리에서 'instagram_scheduler.py' 파일이 없으므로, 인스타그램 Graph API를 이용해 주어진 날짜 범위(2026-11-30~2026-12-06) 동안 최소 3개의 릴스와 3개의 피드 포스트 예약을 위한 JSON 스케줄 파일을 생성하고, 해당 파일을 기반으로 예약 요청을 수행하도록 스크립트를 작성한다. 스크립트는 실패 시 재시도 로직(최대 3회)과 로그를 'sessions/2026-11-30_to_12-06_instagram_run_log.txt'에 기록하도록 한다. → 산출물 sessions
+- [2026-11-16] instagram_scheduler.py --start-date 2026-11-18 --end-date 2026-11-24 로 실행하고, 성공 여부와 에러 메시지를 sessions/2026-11-18_to_24_instagram_run_log.txt에 기록하라. → 산출물 sessions/2026-11-16T18-37/developer.md
+- [2026-11-16] instagram_scheduler.py 파일이 현재 프로젝트에 존재하는지 확인하고, 없으면 생성하거나 경로를 수정하여 다시 실행 가능하도록 설정하라. 필요 시 에러 로그를 분석해 문제점을 명시적으로 보고하라. → 산출물 sessions/2026-11-16T18-52/developer.md
+- [2026-11-16] python instagram_scheduler.py --start-date 2026-11-18 --end-date 2026-11-24 > sessions/2026-11-18_to_24_instagram_run_log.txt 2>&1 → 산출물 sessions/2026-11-16T18-52/developer.md
